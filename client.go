@@ -75,13 +75,15 @@ type SFTPClientWrapper struct {
 
 var _ SFTPClientInterface = (*SFTPClientWrapper)(nil)
 
-func (w *SFTPClientWrapper) Open(path string) (SFTPFile, error)         { return w.client.Open(path) }
-func (w *SFTPClientWrapper) Create(path string) (SFTPFile, error)       { return w.client.Create(path) }
-func (w *SFTPClientWrapper) Remove(path string) error                   { return w.client.Remove(path) }
-func (w *SFTPClientWrapper) Stat(path string) (os.FileInfo, error)      { return w.client.Stat(path) }
-func (w *SFTPClientWrapper) Chmod(path string, mode os.FileMode) error  { return w.client.Chmod(path, mode) }
-func (w *SFTPClientWrapper) MkdirAll(path string) error                 { return w.client.MkdirAll(path) }
-func (w *SFTPClientWrapper) Close() error                               { return w.client.Close() }
+func (w *SFTPClientWrapper) Open(path string) (SFTPFile, error)    { return w.client.Open(path) }
+func (w *SFTPClientWrapper) Create(path string) (SFTPFile, error)  { return w.client.Create(path) }
+func (w *SFTPClientWrapper) Remove(path string) error              { return w.client.Remove(path) }
+func (w *SFTPClientWrapper) Stat(path string) (os.FileInfo, error) { return w.client.Stat(path) }
+func (w *SFTPClientWrapper) Chmod(path string, mode os.FileMode) error {
+	return w.client.Chmod(path, mode)
+}
+func (w *SFTPClientWrapper) MkdirAll(path string) error { return w.client.MkdirAll(path) }
+func (w *SFTPClientWrapper) Close() error               { return w.client.Close() }
 
 // NewClient creates a new SSH/SFTP client.
 func NewClient(config Config) (*Client, error) {

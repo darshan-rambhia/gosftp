@@ -337,7 +337,7 @@ func TestUploadFile_LocalFileNotFound(t *testing.T) {
 		sftpClient: nil,
 	}
 
-	err := c.UploadFile(context.Background(),"/nonexistent/file.txt", "/remote/path")
+	err := c.UploadFile(context.Background(), "/nonexistent/file.txt", "/remote/path")
 	if err == nil {
 		t.Error("expected error for nonexistent local file, got nil")
 	}
@@ -1182,13 +1182,13 @@ func TestMockClient_UploadFile(t *testing.T) {
 	remotePath := "/remote/test.txt"
 
 	// Test upload.
-	err := client.UploadFile(context.Background(),localPath, remotePath)
+	err := client.UploadFile(context.Background(), localPath, remotePath)
 	if err != nil {
 		t.Errorf("UploadFile() error = %v", err)
 	}
 
 	// Verify file exists.
-	exists, err := client.FileExists(context.Background(),remotePath)
+	exists, err := client.FileExists(context.Background(), remotePath)
 	if err != nil {
 		t.Errorf("FileExists() error = %v", err)
 	}
@@ -1202,7 +1202,7 @@ func TestMockClient_GetFileHash(t *testing.T) {
 	client := NewMockClient()
 	client.SetFile("/test.txt", []byte("test content"), 0644)
 
-	hash, err := client.GetFileHash(context.Background(),"/test.txt")
+	hash, err := client.GetFileHash(context.Background(), "/test.txt")
 	if err != nil {
 		t.Errorf("GetFileHash() error = %v", err)
 	}
@@ -1211,7 +1211,7 @@ func TestMockClient_GetFileHash(t *testing.T) {
 	}
 
 	// Test non-existent file.
-	_, err = client.GetFileHash(context.Background(),"/nonexistent.txt")
+	_, err = client.GetFileHash(context.Background(), "/nonexistent.txt")
 	if err == nil {
 		t.Error("expected error for nonexistent file")
 	}
@@ -1222,19 +1222,19 @@ func TestMockClient_SetFileAttributes(t *testing.T) {
 	client := NewMockClient()
 	client.SetFile("/test.txt", []byte("content"), 0644)
 
-	err := client.SetFileAttributes(context.Background(),"/test.txt", "root", "root", "0755")
+	err := client.SetFileAttributes(context.Background(), "/test.txt", "root", "root", "0755")
 	if err != nil {
 		t.Errorf("SetFileAttributes() error = %v", err)
 	}
 
 	// Test with non-existent file.
-	err = client.SetFileAttributes(context.Background(),"/nonexistent.txt", "root", "", "")
+	err = client.SetFileAttributes(context.Background(), "/nonexistent.txt", "root", "", "")
 	if err == nil {
 		t.Error("expected error for nonexistent file")
 	}
 
 	// Test invalid mode.
-	err = client.SetFileAttributes(context.Background(),"/test.txt", "", "", "invalid")
+	err = client.SetFileAttributes(context.Background(), "/test.txt", "", "", "invalid")
 	if err == nil {
 		t.Error("expected error for invalid mode")
 	}
@@ -1246,25 +1246,25 @@ func TestMockClient_DeleteFile(t *testing.T) {
 	client.SetFile("/test.txt", []byte("content"), 0644)
 
 	// Verify file exists.
-	exists, _ := client.FileExists(context.Background(),"/test.txt")
+	exists, _ := client.FileExists(context.Background(), "/test.txt")
 	if !exists {
 		t.Error("expected file to exist before delete")
 	}
 
 	// Delete file.
-	err := client.DeleteFile(context.Background(),"/test.txt")
+	err := client.DeleteFile(context.Background(), "/test.txt")
 	if err != nil {
 		t.Errorf("DeleteFile() error = %v", err)
 	}
 
 	// Verify file is gone.
-	exists, _ = client.FileExists(context.Background(),"/test.txt")
+	exists, _ = client.FileExists(context.Background(), "/test.txt")
 	if exists {
 		t.Error("expected file to not exist after delete")
 	}
 
 	// Delete non-existent file should not error.
-	err = client.DeleteFile(context.Background(),"/nonexistent.txt")
+	err = client.DeleteFile(context.Background(), "/nonexistent.txt")
 	if err != nil {
 		t.Errorf("DeleteFile() for nonexistent file should not error: %v", err)
 	}
@@ -1275,7 +1275,7 @@ func TestMockClient_FileExists(t *testing.T) {
 	client := NewMockClient()
 	client.SetFile("/exists.txt", []byte("content"), 0644)
 
-	exists, err := client.FileExists(context.Background(),"/exists.txt")
+	exists, err := client.FileExists(context.Background(), "/exists.txt")
 	if err != nil {
 		t.Errorf("FileExists() error = %v", err)
 	}
@@ -1283,7 +1283,7 @@ func TestMockClient_FileExists(t *testing.T) {
 		t.Error("expected file to exist")
 	}
 
-	exists, err = client.FileExists(context.Background(),"/not-exists.txt")
+	exists, err = client.FileExists(context.Background(), "/not-exists.txt")
 	if err != nil {
 		t.Errorf("FileExists() error = %v", err)
 	}
@@ -1298,7 +1298,7 @@ func TestMockClient_GetFileInfo(t *testing.T) {
 	content := []byte("test content here")
 	client.SetFile("/test.txt", content, 0755)
 
-	info, err := client.GetFileInfo(context.Background(),"/test.txt")
+	info, err := client.GetFileInfo(context.Background(), "/test.txt")
 	if err != nil {
 		t.Errorf("GetFileInfo() error = %v", err)
 	}
@@ -1313,7 +1313,7 @@ func TestMockClient_GetFileInfo(t *testing.T) {
 	}
 
 	// Test non-existent file.
-	_, err = client.GetFileInfo(context.Background(),"/nonexistent.txt")
+	_, err = client.GetFileInfo(context.Background(), "/nonexistent.txt")
 	if err == nil {
 		t.Error("expected error for nonexistent file")
 	}
@@ -1326,7 +1326,7 @@ func TestMockClient_ReadFileContent(t *testing.T) {
 	client.SetFile("/test.txt", content, 0644)
 
 	// Read all content.
-	data, err := client.ReadFileContent(context.Background(),"/test.txt", 0)
+	data, err := client.ReadFileContent(context.Background(), "/test.txt", 0)
 	if err != nil {
 		t.Errorf("ReadFileContent() error = %v", err)
 	}
@@ -1335,7 +1335,7 @@ func TestMockClient_ReadFileContent(t *testing.T) {
 	}
 
 	// Read with limit.
-	data, err = client.ReadFileContent(context.Background(),"/test.txt", 10)
+	data, err = client.ReadFileContent(context.Background(), "/test.txt", 10)
 	if err != nil {
 		t.Errorf("ReadFileContent() with limit error = %v", err)
 	}
@@ -1344,7 +1344,7 @@ func TestMockClient_ReadFileContent(t *testing.T) {
 	}
 
 	// Read non-existent file.
-	_, err = client.ReadFileContent(context.Background(),"/nonexistent.txt", 0)
+	_, err = client.ReadFileContent(context.Background(), "/nonexistent.txt", 0)
 	if err == nil {
 		t.Error("expected error for nonexistent file")
 	}
@@ -1365,7 +1365,7 @@ func TestMockClient_WithErrors(t *testing.T) {
 	client = NewMockClient()
 	client.SetFile("/test.txt", []byte("content"), 0644)
 	client.SetError("GetFileHash", testErr)
-	if _, err := client.GetFileHash(context.Background(),"/test.txt"); err != testErr {
+	if _, err := client.GetFileHash(context.Background(), "/test.txt"); err != testErr {
 		t.Errorf("GetFileHash() error = %v, want %v", err, testErr)
 	}
 
@@ -1373,21 +1373,21 @@ func TestMockClient_WithErrors(t *testing.T) {
 	client = NewMockClient()
 	client.SetFile("/test.txt", []byte("content"), 0644)
 	client.SetError("SetFileAttributes", testErr)
-	if err := client.SetFileAttributes(context.Background(),"/test.txt", "root", "", ""); err != testErr {
+	if err := client.SetFileAttributes(context.Background(), "/test.txt", "root", "", ""); err != testErr {
 		t.Errorf("SetFileAttributes() error = %v, want %v", err, testErr)
 	}
 
 	// Test DeleteFile error.
 	client = NewMockClient()
 	client.SetError("DeleteFile", testErr)
-	if err := client.DeleteFile(context.Background(),"/test.txt"); err != testErr {
+	if err := client.DeleteFile(context.Background(), "/test.txt"); err != testErr {
 		t.Errorf("DeleteFile() error = %v, want %v", err, testErr)
 	}
 
 	// Test FileExists error.
 	client = NewMockClient()
 	client.SetError("FileExists", testErr)
-	if _, err := client.FileExists(context.Background(),"/test.txt"); err != testErr {
+	if _, err := client.FileExists(context.Background(), "/test.txt"); err != testErr {
 		t.Errorf("FileExists() error = %v, want %v", err, testErr)
 	}
 
@@ -1395,7 +1395,7 @@ func TestMockClient_WithErrors(t *testing.T) {
 	client = NewMockClient()
 	client.SetFile("/test.txt", []byte("content"), 0644)
 	client.SetError("GetFileInfo", testErr)
-	if _, err := client.GetFileInfo(context.Background(),"/test.txt"); err != testErr {
+	if _, err := client.GetFileInfo(context.Background(), "/test.txt"); err != testErr {
 		t.Errorf("GetFileInfo() error = %v, want %v", err, testErr)
 	}
 
@@ -1403,7 +1403,7 @@ func TestMockClient_WithErrors(t *testing.T) {
 	client = NewMockClient()
 	client.SetFile("/test.txt", []byte("content"), 0644)
 	client.SetError("ReadFileContent", testErr)
-	if _, err := client.ReadFileContent(context.Background(),"/test.txt", 0); err != testErr {
+	if _, err := client.ReadFileContent(context.Background(), "/test.txt", 0); err != testErr {
 		t.Errorf("ReadFileContent() error = %v, want %v", err, testErr)
 	}
 
@@ -1415,7 +1415,7 @@ func TestMockClient_WithErrors(t *testing.T) {
 	if err := os.WriteFile(localPath, []byte("content"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	if err := client.UploadFile(context.Background(),localPath, "/remote.txt"); err != testErr {
+	if err := client.UploadFile(context.Background(), localPath, "/remote.txt"); err != testErr {
 		t.Errorf("UploadFile() error = %v, want %v", err, testErr)
 	}
 }
@@ -1423,7 +1423,7 @@ func TestMockClient_WithErrors(t *testing.T) {
 // TestMockClient_UploadFile_LocalNotFound tests upload with missing local file.
 func TestMockClient_UploadFile_LocalNotFound(t *testing.T) {
 	client := NewMockClient()
-	err := client.UploadFile(context.Background(),"/nonexistent/local/file.txt", "/remote.txt")
+	err := client.UploadFile(context.Background(), "/nonexistent/local/file.txt", "/remote.txt")
 	if err == nil {
 		t.Error("expected error for nonexistent local file")
 	}
@@ -1608,7 +1608,7 @@ func TestClient_GetFileHash_WithMockSFTP(t *testing.T) {
 
 	client := NewClientWithSFTP(mockSFTP, nil)
 
-	hash, err := client.GetFileHash(context.Background(),"/test.txt")
+	hash, err := client.GetFileHash(context.Background(), "/test.txt")
 	if err != nil {
 		t.Errorf("GetFileHash() error = %v", err)
 	}
@@ -1634,7 +1634,7 @@ func TestClient_GetFileHash_FileNotFound(t *testing.T) {
 	mockSFTP := NewMockSFTPClient()
 	client := NewClientWithSFTP(mockSFTP, nil)
 
-	_, err := client.GetFileHash(context.Background(),"/nonexistent.txt")
+	_, err := client.GetFileHash(context.Background(), "/nonexistent.txt")
 	if err == nil {
 		t.Error("expected error for nonexistent file")
 	}
@@ -1646,7 +1646,7 @@ func TestClient_GetFileHash_OpenError(t *testing.T) {
 	mockSFTP.SetError("Open", os.ErrPermission)
 	client := NewClientWithSFTP(mockSFTP, nil)
 
-	_, err := client.GetFileHash(context.Background(),"/test.txt")
+	_, err := client.GetFileHash(context.Background(), "/test.txt")
 	if err == nil {
 		t.Error("expected error when Open fails")
 	}
@@ -1658,7 +1658,7 @@ func TestClient_FileExists_WithMockSFTP(t *testing.T) {
 	client := NewClientWithSFTP(mockSFTP, nil)
 
 	// Test existing file.
-	exists, err := client.FileExists(context.Background(),"/exists.txt")
+	exists, err := client.FileExists(context.Background(), "/exists.txt")
 	if err != nil {
 		t.Errorf("FileExists() error = %v", err)
 	}
@@ -1667,7 +1667,7 @@ func TestClient_FileExists_WithMockSFTP(t *testing.T) {
 	}
 
 	// Test non-existing file.
-	exists, err = client.FileExists(context.Background(),"/not-exists.txt")
+	exists, err = client.FileExists(context.Background(), "/not-exists.txt")
 	if err != nil {
 		t.Errorf("FileExists() error = %v", err)
 	}
@@ -1682,7 +1682,7 @@ func TestClient_FileExists_StatError(t *testing.T) {
 	mockSFTP.SetError("Stat", os.ErrPermission)
 	client := NewClientWithSFTP(mockSFTP, nil)
 
-	_, err := client.FileExists(context.Background(),"/test.txt")
+	_, err := client.FileExists(context.Background(), "/test.txt")
 	if err == nil {
 		t.Error("expected error when Stat fails")
 	}
@@ -1694,7 +1694,7 @@ func TestClient_GetFileInfo_WithMockSFTP(t *testing.T) {
 	mockSFTP.SetFile("/test.txt", content, 0755)
 	client := NewClientWithSFTP(mockSFTP, nil)
 
-	info, err := client.GetFileInfo(context.Background(),"/test.txt")
+	info, err := client.GetFileInfo(context.Background(), "/test.txt")
 	if err != nil {
 		t.Errorf("GetFileInfo() error = %v", err)
 	}
@@ -1713,7 +1713,7 @@ func TestClient_GetFileInfo_FileNotFound(t *testing.T) {
 	mockSFTP := NewMockSFTPClient()
 	client := NewClientWithSFTP(mockSFTP, nil)
 
-	_, err := client.GetFileInfo(context.Background(),"/nonexistent.txt")
+	_, err := client.GetFileInfo(context.Background(), "/nonexistent.txt")
 	if err == nil {
 		t.Error("expected error for nonexistent file")
 	}
@@ -1725,19 +1725,19 @@ func TestClient_DeleteFile_WithMockSFTP(t *testing.T) {
 	client := NewClientWithSFTP(mockSFTP, nil)
 
 	// Verify file exists.
-	exists, _ := client.FileExists(context.Background(),"/test.txt")
+	exists, _ := client.FileExists(context.Background(), "/test.txt")
 	if !exists {
 		t.Fatal("expected file to exist before delete")
 	}
 
 	// Delete file.
-	err := client.DeleteFile(context.Background(),"/test.txt")
+	err := client.DeleteFile(context.Background(), "/test.txt")
 	if err != nil {
 		t.Errorf("DeleteFile() error = %v", err)
 	}
 
 	// Verify file is gone.
-	exists, _ = client.FileExists(context.Background(),"/test.txt")
+	exists, _ = client.FileExists(context.Background(), "/test.txt")
 	if exists {
 		t.Error("expected file to not exist after delete")
 	}
@@ -1748,7 +1748,7 @@ func TestClient_DeleteFile_NotExist(t *testing.T) {
 	client := NewClientWithSFTP(mockSFTP, nil)
 
 	// Delete non-existent file should not error (idempotent).
-	err := client.DeleteFile(context.Background(),"/nonexistent.txt")
+	err := client.DeleteFile(context.Background(), "/nonexistent.txt")
 	if err != nil {
 		t.Errorf("DeleteFile() for nonexistent file should not error: %v", err)
 	}
@@ -1760,7 +1760,7 @@ func TestClient_DeleteFile_RemoveError(t *testing.T) {
 	mockSFTP.SetError("Remove", os.ErrPermission)
 	client := NewClientWithSFTP(mockSFTP, nil)
 
-	err := client.DeleteFile(context.Background(),"/test.txt")
+	err := client.DeleteFile(context.Background(), "/test.txt")
 	if err == nil {
 		t.Error("expected error when Remove fails")
 	}
@@ -1773,7 +1773,7 @@ func TestClient_ReadFileContent_WithMockSFTP(t *testing.T) {
 	client := NewClientWithSFTP(mockSFTP, nil)
 
 	// Read all content.
-	data, err := client.ReadFileContent(context.Background(),"/test.txt", 0)
+	data, err := client.ReadFileContent(context.Background(), "/test.txt", 0)
 	if err != nil {
 		t.Errorf("ReadFileContent() error = %v", err)
 	}
@@ -1789,7 +1789,7 @@ func TestClient_ReadFileContent_WithLimit(t *testing.T) {
 	client := NewClientWithSFTP(mockSFTP, nil)
 
 	// Read with limit.
-	data, err := client.ReadFileContent(context.Background(),"/test.txt", 10)
+	data, err := client.ReadFileContent(context.Background(), "/test.txt", 10)
 	if err != nil {
 		t.Errorf("ReadFileContent() with limit error = %v", err)
 	}
@@ -1805,7 +1805,7 @@ func TestClient_ReadFileContent_FileNotFound(t *testing.T) {
 	mockSFTP := NewMockSFTPClient()
 	client := NewClientWithSFTP(mockSFTP, nil)
 
-	_, err := client.ReadFileContent(context.Background(),"/nonexistent.txt", 0)
+	_, err := client.ReadFileContent(context.Background(), "/nonexistent.txt", 0)
 	if err == nil {
 		t.Error("expected error for nonexistent file")
 	}
@@ -1817,7 +1817,7 @@ func TestClient_ReadFileContent_OpenError(t *testing.T) {
 	mockSFTP.SetError("Open", os.ErrPermission)
 	client := NewClientWithSFTP(mockSFTP, nil)
 
-	_, err := client.ReadFileContent(context.Background(),"/test.txt", 0)
+	_, err := client.ReadFileContent(context.Background(), "/test.txt", 0)
 	if err == nil {
 		t.Error("expected error when Open fails")
 	}
@@ -1829,7 +1829,7 @@ func TestClient_SetFileAttributes_Mode(t *testing.T) {
 	client := NewClientWithSFTP(mockSFTP, nil)
 
 	// Set only mode (no owner/group to avoid SSH session).
-	err := client.SetFileAttributes(context.Background(),"/test.txt", "", "", "0755")
+	err := client.SetFileAttributes(context.Background(), "/test.txt", "", "", "0755")
 	if err != nil {
 		t.Errorf("SetFileAttributes() error = %v", err)
 	}
@@ -1846,7 +1846,7 @@ func TestClient_SetFileAttributes_InvalidMode(t *testing.T) {
 	mockSFTP.SetFile("/test.txt", []byte("content"), 0644)
 	client := NewClientWithSFTP(mockSFTP, nil)
 
-	err := client.SetFileAttributes(context.Background(),"/test.txt", "", "", "invalid")
+	err := client.SetFileAttributes(context.Background(), "/test.txt", "", "", "invalid")
 	if err == nil {
 		t.Error("expected error for invalid mode")
 	}
@@ -1858,7 +1858,7 @@ func TestClient_SetFileAttributes_ChmodError(t *testing.T) {
 	mockSFTP.SetError("Chmod", os.ErrPermission)
 	client := NewClientWithSFTP(mockSFTP, nil)
 
-	err := client.SetFileAttributes(context.Background(),"/test.txt", "", "", "0755")
+	err := client.SetFileAttributes(context.Background(), "/test.txt", "", "", "0755")
 	if err == nil {
 		t.Error("expected error when Chmod fails")
 	}
@@ -1870,7 +1870,7 @@ func TestClient_SetFileAttributes_EmptyMode(t *testing.T) {
 	client := NewClientWithSFTP(mockSFTP, nil)
 
 	// Empty mode should be a no-op (no error).
-	err := client.SetFileAttributes(context.Background(),"/test.txt", "", "", "")
+	err := client.SetFileAttributes(context.Background(), "/test.txt", "", "", "")
 	if err != nil {
 		t.Errorf("SetFileAttributes() with empty mode should not error: %v", err)
 	}
@@ -1913,7 +1913,7 @@ func TestClient_UploadFile_WithMockSFTP(t *testing.T) {
 	remotePath := "/remote/path/test.txt"
 
 	// Test upload.
-	err := client.UploadFile(context.Background(),localPath, remotePath)
+	err := client.UploadFile(context.Background(), localPath, remotePath)
 	if err != nil {
 		t.Errorf("UploadFile() error = %v", err)
 	}
@@ -1936,7 +1936,7 @@ func TestClient_UploadFile_MkdirAllError(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := client.UploadFile(context.Background(),localPath, "/remote/dir/file.txt")
+	err := client.UploadFile(context.Background(), localPath, "/remote/dir/file.txt")
 	if err == nil {
 		t.Error("expected error when MkdirAll fails")
 	}
@@ -1954,7 +1954,7 @@ func TestClient_UploadFile_CreateError(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := client.UploadFile(context.Background(),localPath, "/remote/file.txt")
+	err := client.UploadFile(context.Background(), localPath, "/remote/file.txt")
 	if err == nil {
 		t.Error("expected error when Create fails")
 	}
@@ -1964,7 +1964,7 @@ func TestClient_UploadFile_LocalNotFound(t *testing.T) {
 	mockSFTP := NewMockSFTPClient()
 	client := NewClientWithSFTP(mockSFTP, nil)
 
-	err := client.UploadFile(context.Background(),"/nonexistent/local/file.txt", "/remote/file.txt")
+	err := client.UploadFile(context.Background(), "/nonexistent/local/file.txt", "/remote/file.txt")
 	if err == nil {
 		t.Error("expected error for nonexistent local file")
 	}
@@ -1982,7 +1982,7 @@ func TestClient_UploadFile_RootPath(t *testing.T) {
 	}
 
 	// Test uploading to root path (no directory to create).
-	err := client.UploadFile(context.Background(),localPath, "/rootfile.txt")
+	err := client.UploadFile(context.Background(), localPath, "/rootfile.txt")
 	if err != nil {
 		t.Errorf("UploadFile() to root error = %v", err)
 	}
@@ -2167,7 +2167,7 @@ func TestSetFileAttributes_OwnerValidation(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := client.SetFileAttributes(context.Background(),"/test.txt", tt.owner, tt.group, "")
+			err := client.SetFileAttributes(context.Background(), "/test.txt", tt.owner, tt.group, "")
 			if tt.expectError {
 				if err == nil {
 					t.Error("expected validation error, got nil")
@@ -2201,7 +2201,7 @@ func TestSetFileAttributes_ModeValidation(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := client.SetFileAttributes(context.Background(),"/test.txt", "", "", tt.mode)
+			err := client.SetFileAttributes(context.Background(), "/test.txt", "", "", tt.mode)
 			if tt.expectError && err == nil {
 				t.Errorf("expected error for mode %q, got nil", tt.mode)
 			}

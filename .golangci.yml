@@ -5,14 +5,43 @@ run:
   tests: true
 
 linters:
-  default: standard
-  disable:
-    - errcheck  # Too many false positives for defer Close() patterns
+  default: none
   enable:
+    - copyloopvar
+    - durationcheck
+    - errcheck
+    - godot
+    - ineffassign
+    - makezero
     - misspell
+    - nilerr
+    - predeclared
+    - staticcheck
     - unconvert
-    - prealloc
+    - unparam
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
 
-settings:
-  misspell:
-    locale: US
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  exclusions:
+    generated: lax
+    paths:
+      - third_party$
+      - builtin$
+      - examples$

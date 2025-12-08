@@ -358,7 +358,11 @@ func BenchmarkHash(b *testing.B) {
 			if err := client.UploadFile(ctx, localPath, remotePath); err != nil {
 				b.Fatalf("upload failed: %v", err)
 			}
-			defer client.DeleteFile(ctx, remotePath)
+			defer func() {
+				if err := client.DeleteFile(ctx, remotePath); err != nil {
+					b.Logf("delete failed: %v", err)
+				}
+			}()
 
 			b.ResetTimer()
 			b.SetBytes(int64(sz.size))

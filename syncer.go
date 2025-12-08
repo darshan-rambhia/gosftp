@@ -409,10 +409,10 @@ func HashFile(path string) (string, int64, error) {
 func ComputeCombinedHash(files []FileInfo) string {
 	h := sha256.New()
 	for _, file := range files {
-		io.WriteString(h, file.RelPath)
-		io.WriteString(h, ":")
-		io.WriteString(h, file.Hash)
-		io.WriteString(h, "\n")
+		_, _ = io.WriteString(h, file.RelPath)
+		_, _ = io.WriteString(h, ":")
+		_, _ = io.WriteString(h, file.Hash)
+		_, _ = io.WriteString(h, "\n")
 	}
 	return "sha256:" + hex.EncodeToString(h.Sum(nil))
 }
