@@ -182,16 +182,6 @@ func TestNewConnectionPool(t *testing.T) {
 	pool.Close()
 }
 
-func TestDefaultPool(t *testing.T) {
-	if DefaultPool == nil {
-		t.Fatal("expected DefaultPool to be initialized")
-	}
-
-	stats := DefaultPool.Stats()
-	// Just verify it works.
-	_ = stats
-}
-
 func TestPoolStats(t *testing.T) {
 	stats := PoolStats{
 		Total: 10,
@@ -207,5 +197,280 @@ func TestPoolStats(t *testing.T) {
 	}
 	if stats.Idle != 5 {
 		t.Errorf("Idle = %d, want 5", stats.Idle)
+	}
+}
+
+func TestConnectionPool_StatsWithConnections(t *testing.T) {
+	pool := NewConnectionPool(time.Minute)
+	defer pool.Close()
+
+	// Manually add connections to test stats
+	config1 := Config{Host: "host1", Port: 22, User: "user"}
+	config2 := Config{Host: "host2", Port: 22, User: "user"}
+
+	key1 := pool.connectionKey(config1)
+	key2 := pool.connectionKey(config2)
+
+	pool.mu.Lock()
+	pool.connections[key1] = &pooledConnection{
+		client:   &Client{},
+		lastUsed: time.Now(),
+		inUse:    1, // in use
+	}
+	pool.connections[key2] = &pooledConnection{
+		client:   &Client{},
+		lastUsed: time.Now(),
+		inUse:    0, // idle
+	}
+	pool.mu.Unlock()
+
+	stats := pool.Stats()
+	if stats.Total != 2 {
+		t.Errorf("expected 2 total connections, got %d", stats.Total)
+	}
+	if stats.InUse != 1 {
+		t.Errorf("expected 1 in-use connection, got %d", stats.InUse)
+	}
+	if stats.Idle != 1 {
+		t.Errorf("expected 1 idle connection, got %d", stats.Idle)
+	}
+}
+
+func TestConnectionPool_ReleaseDecrementsInUse(t *testing.T) {
+	pool := NewConnectionPool(time.Minute)
+	defer pool.Close()
+
+	config := Config{Host: "host1", Port: 22, User: "user"}
+	key := pool.connectionKey(config)
+
+	pool.mu.Lock()
+	pool.connections[key] = &pooledConnection{
+		client:   &Client{},
+		lastUsed: time.Now(),
+		inUse:    2,
+	}
+	pool.mu.Unlock()
+
+	pool.Release(config)
+
+	pool.mu.RLock()
+	pc := pool.connections[key]
+	pool.mu.RUnlock()
+
+	if pc.inUse != 1 {
+		t.Errorf("expected inUse=1 after release, got %d", pc.inUse)
+	}
+
+	// Release again
+	pool.Release(config)
+
+	pool.mu.RLock()
+	pc = pool.connections[key]
+	pool.mu.RUnlock()
+
+	if pc.inUse != 0 {
+		t.Errorf("expected inUse=0 after second release, got %d", pc.inUse)
+	}
+
+	// Release when already 0 should stay at 0
+	pool.Release(config)
+
+	pool.mu.RLock()
+	pc = pool.connections[key]
+	pool.mu.RUnlock()
+
+	if pc.inUse != 0 {
+		t.Errorf("expected inUse=0 after third release, got %d", pc.inUse)
+	}
+}
+
+func TestConnectionPool_CloseIdleRemovesOldConnections(t *testing.T) {
+	pool := NewConnectionPool(time.Millisecond * 10)
+	defer pool.Close()
+
+	config := Config{Host: "host1", Port: 22, User: "user"}
+	key := pool.connectionKey(config)
+
+	// Add an old idle connection
+	pool.mu.Lock()
+	pool.connections[key] = &pooledConnection{
+		client:   &Client{},
+		lastUsed: time.Now().Add(-time.Hour), // 1 hour ago
+		inUse:    0,
+	}
+	pool.mu.Unlock()
+
+	pool.CloseIdle()
+
+	pool.mu.RLock()
+	_, exists := pool.connections[key]
+	pool.mu.RUnlock()
+
+	if exists {
+		t.Error("expected idle connection to be removed")
+	}
+}
+
+func TestConnectionPool_CloseIdleKeepsInUseConnections(t *testing.T) {
+	pool := NewConnectionPool(time.Millisecond * 10)
+	defer pool.Close()
+
+	config := Config{Host: "host1", Port: 22, User: "user"}
+	key := pool.connectionKey(config)
+
+	// Add an old connection that is in use
+	pool.mu.Lock()
+	pool.connections[key] = &pooledConnection{
+		client:   &Client{},
+		lastUsed: time.Now().Add(-time.Hour), // 1 hour ago
+		inUse:    1,                          // still in use
+	}
+	pool.mu.Unlock()
+
+	pool.CloseIdle()
+
+	pool.mu.RLock()
+	_, exists := pool.connections[key]
+	pool.mu.RUnlock()
+
+	if !exists {
+		t.Error("expected in-use connection to be kept")
+	}
+}
+
+func TestConnectionPool_CloseRemovesAllConnections(t *testing.T) {
+	pool := NewConnectionPool(time.Minute)
+
+	config1 := Config{Host: "host1", Port: 22, User: "user"}
+	config2 := Config{Host: "host2", Port: 22, User: "user"}
+
+	key1 := pool.connectionKey(config1)
+	key2 := pool.connectionKey(config2)
+
+	pool.mu.Lock()
+	pool.connections[key1] = &pooledConnection{
+		client:   &Client{},
+		lastUsed: time.Now(),
+		inUse:    1,
+	}
+	pool.connections[key2] = &pooledConnection{
+		client:   &Client{},
+		lastUsed: time.Now(),
+		inUse:    0,
+	}
+	pool.mu.Unlock()
+
+	pool.Close()
+
+	stats := pool.Stats()
+	if stats.Total != 0 {
+		t.Errorf("expected 0 connections after close, got %d", stats.Total)
+	}
+}
+
+func TestConnectionKey_WithPrivateKey(t *testing.T) {
+	pool := NewConnectionPool(time.Minute)
+	defer pool.Close()
+
+	config1 := Config{
+		Host:       "host1",
+		Port:       22,
+		User:       "user",
+		PrivateKey: "key-content-1",
+	}
+	config2 := Config{
+		Host:       "host1",
+		Port:       22,
+		User:       "user",
+		PrivateKey: "key-content-2",
+	}
+
+	key1 := pool.connectionKey(config1)
+	key2 := pool.connectionKey(config2)
+
+	if key1 == key2 {
+		t.Error("expected different keys for different private keys")
+	}
+}
+
+func TestConnectionKey_WithKeyPath(t *testing.T) {
+	pool := NewConnectionPool(time.Minute)
+	defer pool.Close()
+
+	config1 := Config{
+		Host:    "host1",
+		Port:    22,
+		User:    "user",
+		KeyPath: "/path/to/key1",
+	}
+	config2 := Config{
+		Host:    "host1",
+		Port:    22,
+		User:    "user",
+		KeyPath: "/path/to/key2",
+	}
+
+	key1 := pool.connectionKey(config1)
+	key2 := pool.connectionKey(config2)
+
+	if key1 == key2 {
+		t.Error("expected different keys for different key paths")
+	}
+}
+
+func TestConnectionKey_WithBastionPort(t *testing.T) {
+	pool := NewConnectionPool(time.Minute)
+	defer pool.Close()
+
+	config1 := Config{
+		Host:        "host1",
+		Port:        22,
+		User:        "user",
+		BastionHost: "bastion",
+		BastionPort: 22,
+	}
+	config2 := Config{
+		Host:        "host1",
+		Port:        22,
+		User:        "user",
+		BastionHost: "bastion",
+		BastionPort: 2222,
+	}
+
+	key1 := pool.connectionKey(config1)
+	key2 := pool.connectionKey(config2)
+
+	if key1 == key2 {
+		t.Error("expected different keys for different bastion ports")
+	}
+}
+
+func TestConnectionPool_CleanupLoop(t *testing.T) {
+	// Create a pool with very short idle timeout
+	pool := NewConnectionPool(time.Millisecond * 20)
+
+	config := Config{Host: "host1", Port: 22, User: "user"}
+	key := pool.connectionKey(config)
+
+	// Add an old idle connection
+	pool.mu.Lock()
+	pool.connections[key] = &pooledConnection{
+		client:   &Client{},
+		lastUsed: time.Now().Add(-time.Hour),
+		inUse:    0,
+	}
+	pool.mu.Unlock()
+
+	// Wait for cleanup loop to run
+	time.Sleep(time.Millisecond * 50)
+
+	pool.mu.RLock()
+	_, exists := pool.connections[key]
+	pool.mu.RUnlock()
+
+	pool.Close()
+
+	if exists {
+		t.Error("expected cleanup loop to remove idle connection")
 	}
 }

@@ -2,6 +2,27 @@ package gosftp
 
 import "time"
 
+// Logger defines the interface for logging in gosftp.
+// Users can implement this interface to integrate with their logging system.
+type Logger interface {
+	// Debugf logs a debug message.
+	Debugf(format string, args ...interface{})
+	// Infof logs an info message.
+	Infof(format string, args ...interface{})
+	// Warnf logs a warning message.
+	Warnf(format string, args ...interface{})
+	// Errorf logs an error message.
+	Errorf(format string, args ...interface{})
+}
+
+// NoOpLogger is a logger that discards all messages.
+type NoOpLogger struct{}
+
+func (n *NoOpLogger) Debugf(format string, args ...interface{}) {}
+func (n *NoOpLogger) Infof(format string, args ...interface{})  {}
+func (n *NoOpLogger) Warnf(format string, args ...interface{})  {}
+func (n *NoOpLogger) Errorf(format string, args ...interface{}) {}
+
 // AuthMethod represents the SSH authentication method to use.
 type AuthMethod string
 
@@ -82,6 +103,10 @@ type Config struct {
 
 	// AgentForwarding enables SSH agent forwarding.
 	AgentForwarding bool
+
+	// Logger is the logger to use for debug and info messages.
+	// If not set, a no-op logger is used (all messages discarded).
+	Logger Logger
 }
 
 // WithDefaults returns a copy of the config with default values applied.
@@ -94,6 +119,9 @@ func (c Config) WithDefaults() Config {
 	}
 	if c.BastionPort == 0 && c.BastionHost != "" {
 		c.BastionPort = 22
+	}
+	if c.Logger == nil {
+		c.Logger = &NoOpLogger{}
 	}
 	return c
 }

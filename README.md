@@ -96,6 +96,7 @@ results, err := syncer.SyncDirectory(ctx, "/local/dir", "/remote/dir", nil)
 ### Authentication Methods
 
 #### Private Key (from file)
+
 ```go
 config := gosftp.Config{
     Host:    "example.com",
@@ -106,6 +107,7 @@ config := gosftp.Config{
 ```
 
 #### Private Key (inline)
+
 ```go
 config := gosftp.Config{
     Host:       "example.com",
@@ -116,6 +118,7 @@ config := gosftp.Config{
 ```
 
 #### Password
+
 ```go
 config := gosftp.Config{
     Host:       "example.com",
@@ -127,6 +130,7 @@ config := gosftp.Config{
 ```
 
 #### Bastion/Jump Host
+
 ```go
 config := gosftp.Config{
     Host:           "internal-server",
@@ -144,13 +148,16 @@ config := gosftp.Config{
 
 ```bash
 # Run unit tests
-go test -short ./...
+task test
 
 # Run benchmarks (requires Docker)
-go test -bench=. -benchmem ./...
+task test:bench
 
 # Run fuzz tests
-go test -fuzz=FuzzExpandPath -fuzztime=30s ./...
+task test:fuzz 
+
+# Generate coverage report (requires Docker)
+task test:coverage
 ```
 
 ## License

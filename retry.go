@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"math/rand"
 	"net"
 	"strings"
@@ -27,6 +26,10 @@ type RetryConfig struct {
 
 	// JitterFactor adds randomness to delay (0.0 = no jitter, 0.5 = ±50% jitter).
 	JitterFactor float64
+
+	// Logger is the logger to use for retry messages.
+	// If not set, a no-op logger is used (all messages discarded).
+	Logger Logger
 }
 
 // DefaultRetryConfig returns sensible default retry configuration.
@@ -37,6 +40,7 @@ func DefaultRetryConfig() RetryConfig {
 		MaxDelay:     30 * time.Second,
 		Multiplier:   2.0,
 		JitterFactor: 0.25,
+		Logger:       &NoOpLogger{},
 	}
 }
 
@@ -52,6 +56,11 @@ type RetryableFunc func() error
 
 // Retry executes the given function with exponential backoff retry logic.
 func Retry(ctx context.Context, config RetryConfig, operation string, fn RetryableFunc) error {
+	// Ensure logger is initialized
+	if config.Logger == nil {
+		config.Logger = &NoOpLogger{}
+	}
+
 	var lastErr error
 
 	for attempt := 0; attempt <= config.MaxRetries; attempt++ {
@@ -76,7 +85,7 @@ func Retry(ctx context.Context, config RetryConfig, operation string, fn Retryab
 
 		delay := calculateDelay(config, attempt)
 
-		log.Printf("[WARN] %s failed (attempt %d/%d): %v. Retrying in %v...",
+		config.Logger.Warnf("%s failed (attempt %d/%d): %v. Retrying in %v...",
 			operation, attempt+1, config.MaxRetries+1, err, delay)
 
 		select {
@@ -108,24 +117,30 @@ func calculateDelay(config RetryConfig, attempt int) time.Duration {
 }
 
 // IsRetryableError checks if an error is transient and worth retrying.
+// It uses error type assertions for more reliable detection, with string matching as a fallback.
 func IsRetryableError(err error) bool {
 	if err == nil {
 		return false
 	}
 
+	// Non-retryable errors: explicit cancellation and deadline exceeded
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return false
 	}
 
+	// Check for net.Error which includes timeout errors
 	var netErr net.Error
 	if errors.As(err, &netErr) {
-		if netErr.Timeout() {
-			return true
-		}
+		// Timeout errors are retryable (Temporary() is deprecated in Go 1.18+)
+		return netErr.Timeout()
 	}
 
-	errMsg := err.Error()
-	retryableMessages := []string{
+	// String-based fallback for errors that don't implement net.Error
+	// Use this only as a last resort, as it's less reliable
+	errMsg := strings.ToLower(err.Error())
+
+	// Common transient error messages that warrant a retry
+	transientPatterns := []string{
 		"connection refused",
 		"connection reset",
 		"broken pipe",
@@ -137,10 +152,11 @@ func IsRetryableError(err error) bool {
 		"ssh: unable to authenticate",
 		"temporary failure",
 		"too many open files",
+		"connection timed out",
 	}
 
-	for _, msg := range retryableMessages {
-		if strings.Contains(strings.ToLower(errMsg), msg) {
+	for _, pattern := range transientPatterns {
+		if strings.Contains(errMsg, pattern) {
 			return true
 		}
 	}

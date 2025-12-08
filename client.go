@@ -4,10 +4,9 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
-	"log"
-	"net"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -168,17 +167,39 @@ func NewClientWithSFTP(sftpClient SFTPClientInterface, sshClient *ssh.Client) *C
 }
 
 // Close closes SFTP, SSH, and bastion connections.
+// Close is idempotent - calling it multiple times is safe.
+// Returns an error if any close operation fails. Multiple errors are aggregated.
 func (c *Client) Close() error {
+	var errs []error
+
 	if c.sftpClient != nil {
-		c.sftpClient.Close()
+		if err := c.sftpClient.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("failed to close SFTP client: %w", err))
+		}
+		c.sftpClient = nil
 	}
 	if c.sshClient != nil {
-		c.sshClient.Close()
+		if err := c.sshClient.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("failed to close SSH client: %w", err))
+		}
+		c.sshClient = nil
 	}
 	if c.bastionClient != nil {
-		c.bastionClient.Close()
+		if err := c.bastionClient.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("failed to close bastion client: %w", err))
+		}
+		c.bastionClient = nil
+	}
+
+	if len(errs) > 0 {
+		return fmt.Errorf("errors closing client: %w", errors.Join(errs...))
 	}
 	return nil
+}
+
+// IsHealthy checks if the client's SSH connection is still valid.
+func (c *Client) IsHealthy() bool {
+	return c != nil && c.sshClient != nil && c.sftpClient != nil
 }
 
 // UploadFile uploads a local file to the remote host.
@@ -465,7 +486,9 @@ func connectToBastion(config Config) (*ssh.Client, error) {
 
 func buildHostKeyCallback(config Config) (ssh.HostKeyCallback, error) {
 	if config.InsecureIgnoreHostKey {
-		log.Printf("[WARN] SSH host key verification disabled for %s:%d - this is insecure!", config.Host, config.Port)
+		if config.Logger != nil {
+			config.Logger.Warnf("SSH host key verification disabled for %s:%d - this is insecure!", config.Host, config.Port)
+		}
 		return ssh.InsecureIgnoreHostKey(), nil
 	}
 
@@ -486,14 +509,18 @@ func buildHostKeyCallback(config Config) (ssh.HostKeyCallback, error) {
 			if err == nil {
 				return callback, nil
 			}
-			log.Printf("[WARN] Could not parse known_hosts file %s: %v", defaultKnownHosts, err)
+			if config.Logger != nil {
+				config.Logger.Warnf("Could not parse known_hosts file %s: %v", defaultKnownHosts, err)
+			}
 		}
 	}
 
-	log.Printf("[WARN] No known_hosts file found for %s:%d - host key verification disabled.", config.Host, config.Port)
-	return func(hostname string, remote net.Addr, key ssh.PublicKey) error {
-		return nil
-	}, nil
+	// Fail-closed: require explicit opt-in if no known_hosts is available
+	return nil, fmt.Errorf(
+		"no known_hosts file found for %s:%d - host key verification impossible. "+
+			"Set InsecureIgnoreHostKey=true to bypass (NOT RECOMMENDED)",
+		config.Host, config.Port,
+	)
 }
 
 func buildAuthMethods(config Config) ([]ssh.AuthMethod, error) {

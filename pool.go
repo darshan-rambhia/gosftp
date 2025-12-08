@@ -47,7 +47,7 @@ func (p *ConnectionPool) GetOrCreate(config Config) (*Client, error) {
 	defer p.mu.Unlock()
 
 	if pc, ok := p.connections[key]; ok {
-		if pc.client != nil && pc.client.sshClient != nil {
+		if pc.client.IsHealthy() {
 			pc.inUse++
 			pc.lastUsed = time.Now()
 			return pc.client, nil
@@ -185,22 +185,4 @@ func (p *ConnectionPool) cleanupLoop() {
 			return
 		}
 	}
-}
-
-// DefaultPool is the default connection pool (5 minute idle timeout).
-var DefaultPool = NewConnectionPool(5 * time.Minute)
-
-// GetConnection gets or creates a connection from the default pool.
-func GetConnection(config Config) (*Client, error) {
-	return DefaultPool.GetOrCreate(config)
-}
-
-// ReleaseConnection releases a connection back to the default pool.
-func ReleaseConnection(config Config) {
-	DefaultPool.Release(config)
-}
-
-// CloseAllConnections closes all connections in the default pool.
-func CloseAllConnections() {
-	DefaultPool.Close()
 }

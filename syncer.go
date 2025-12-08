@@ -42,9 +42,11 @@ func WithConnectionPool(pool *ConnectionPool) SyncerOption {
 
 // NewSyncer creates a new Syncer with the given configuration.
 func NewSyncer(config Config, opts ...SyncerOption) (*Syncer, error) {
+	retryConfig := DefaultRetryConfig()
+	retryConfig.Logger = config.Logger
 	s := &Syncer{
 		config:      config,
-		retryConfig: DefaultRetryConfig(),
+		retryConfig: retryConfig,
 	}
 
 	for _, opt := range opts {

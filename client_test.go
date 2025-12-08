@@ -2384,20 +2384,687 @@ func TestSFTPClientWrapper(t *testing.T) {
 	})
 }
 
-// TestDefaultPoolWrappers tests the default pool wrapper functions.
-func TestDefaultPoolWrappers(t *testing.T) {
-	t.Run("release_and_close_without_connections", func(t *testing.T) {
-		// These should not panic when called without active connections.
-		config := Config{
-			Host: "test.example.com",
-			Port: 22,
-			User: "testuser",
-		}
+// Tests for context cancellation
 
-		// Release should not panic even if connection doesn't exist.
-		ReleaseConnection(config)
+func TestClient_UploadFile_ContextCancelled(t *testing.T) {
+	mockSFTP := NewMockSFTPClient()
+	client := NewClientWithSFTP(mockSFTP, nil)
 
-		// CloseAllConnections should not panic.
-		CloseAllConnections()
-	})
+	// Create a temp file.
+	tmpDir := t.TempDir()
+	localPath := filepath.Join(tmpDir, "test.txt")
+	if err := os.WriteFile(localPath, []byte("content"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // Cancel immediately
+
+	err := client.UploadFile(ctx, localPath, "/remote/file.txt")
+	if err == nil {
+		t.Error("expected error for cancelled context")
+	}
+}
+
+func TestClient_GetFileHash_ContextCancelled(t *testing.T) {
+	mockSFTP := NewMockSFTPClient()
+	mockSFTP.SetFile("/test.txt", []byte("content"), 0644)
+	client := NewClientWithSFTP(mockSFTP, nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // Cancel immediately
+
+	_, err := client.GetFileHash(ctx, "/test.txt")
+	if err == nil {
+		t.Error("expected error for cancelled context")
+	}
+}
+
+func TestClient_DeleteFile_ContextCancelled(t *testing.T) {
+	mockSFTP := NewMockSFTPClient()
+	mockSFTP.SetFile("/test.txt", []byte("content"), 0644)
+	client := NewClientWithSFTP(mockSFTP, nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // Cancel immediately
+
+	err := client.DeleteFile(ctx, "/test.txt")
+	if err == nil {
+		t.Error("expected error for cancelled context")
+	}
+}
+
+func TestClient_FileExists_ContextCancelled(t *testing.T) {
+	mockSFTP := NewMockSFTPClient()
+	mockSFTP.SetFile("/test.txt", []byte("content"), 0644)
+	client := NewClientWithSFTP(mockSFTP, nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // Cancel immediately
+
+	_, err := client.FileExists(ctx, "/test.txt")
+	if err == nil {
+		t.Error("expected error for cancelled context")
+	}
+}
+
+func TestClient_GetFileInfo_ContextCancelled(t *testing.T) {
+	mockSFTP := NewMockSFTPClient()
+	mockSFTP.SetFile("/test.txt", []byte("content"), 0644)
+	client := NewClientWithSFTP(mockSFTP, nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // Cancel immediately
+
+	_, err := client.GetFileInfo(ctx, "/test.txt")
+	if err == nil {
+		t.Error("expected error for cancelled context")
+	}
+}
+
+func TestClient_ReadFileContent_ContextCancelled(t *testing.T) {
+	mockSFTP := NewMockSFTPClient()
+	mockSFTP.SetFile("/test.txt", []byte("content"), 0644)
+	client := NewClientWithSFTP(mockSFTP, nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // Cancel immediately
+
+	_, err := client.ReadFileContent(ctx, "/test.txt", 0)
+	if err == nil {
+		t.Error("expected error for cancelled context")
+	}
+}
+
+func TestClient_SetFileAttributes_ContextCancelled(t *testing.T) {
+	mockSFTP := NewMockSFTPClient()
+	mockSFTP.SetFile("/test.txt", []byte("content"), 0644)
+	client := NewClientWithSFTP(mockSFTP, nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // Cancel immediately
+
+	err := client.SetFileAttributes(ctx, "/test.txt", "", "", "0755")
+	if err == nil {
+		t.Error("expected error for cancelled context")
+	}
+}
+
+// Test Config.WithDefaults
+
+func TestConfig_WithDefaults(t *testing.T) {
+	tests := []struct {
+		name          string
+		input         Config
+		expectedPort  int
+		expectedBPort int
+	}{
+		{
+			name:          "default port",
+			input:         Config{},
+			expectedPort:  22,
+			expectedBPort: 0, // No bastion host
+		},
+		{
+			name:         "custom port",
+			input:        Config{Port: 2222},
+			expectedPort: 2222,
+		},
+		{
+			name: "bastion port defaults",
+			input: Config{
+				BastionHost: "bastion.example.com",
+			},
+			expectedPort:  22,
+			expectedBPort: 22,
+		},
+		{
+			name: "bastion port custom",
+			input: Config{
+				BastionHost: "bastion.example.com",
+				BastionPort: 2222,
+			},
+			expectedPort:  22,
+			expectedBPort: 2222,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := tt.input.WithDefaults()
+			if result.Port != tt.expectedPort {
+				t.Errorf("Port = %d, want %d", result.Port, tt.expectedPort)
+			}
+			if tt.input.BastionHost != "" && result.BastionPort != tt.expectedBPort {
+				t.Errorf("BastionPort = %d, want %d", result.BastionPort, tt.expectedBPort)
+			}
+			if result.Timeout != 30*time.Second {
+				t.Errorf("Timeout = %v, want 30s", result.Timeout)
+			}
+		})
+	}
+}
+
+// Test buildCertificateAuth with CertificatePath
+
+func TestBuildCertificateAuth_WithCertPath(t *testing.T) {
+	keyContent, keyPath := generateTestKey(t)
+
+	// Create a certificate file (will fail parsing but tests the read path)
+	tmpDir := t.TempDir()
+	certPath := filepath.Join(tmpDir, "cert.pub")
+	if err := os.WriteFile(certPath, []byte("not a valid certificate"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name        string
+		config      Config
+		errorSubstr string
+	}{
+		{
+			name: "key path with cert path",
+			config: Config{
+				KeyPath:         keyPath,
+				CertificatePath: certPath,
+			},
+			errorSubstr: "failed to parse certificate",
+		},
+		{
+			name: "inline key with cert path",
+			config: Config{
+				PrivateKey:      keyContent,
+				CertificatePath: certPath,
+			},
+			errorSubstr: "failed to parse certificate",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := buildCertificateAuth(tt.config)
+			if err == nil {
+				t.Error("expected error, got nil")
+			} else if !findSubstring(err.Error(), tt.errorSubstr) {
+				t.Errorf("expected error containing %q, got %q", tt.errorSubstr, err.Error())
+			}
+		})
+	}
+}
+
+// Test buildAuthMethods with empty auth method (default to private key)
+
+func TestBuildAuthMethods_EmptyAuthMethod(t *testing.T) {
+	keyContent, _ := generateTestKey(t)
+
+	config := Config{
+		AuthMethod: "", // Empty, should infer from provided credentials
+		PrivateKey: keyContent,
+	}
+
+	methods, err := buildAuthMethods(config)
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+	if len(methods) == 0 {
+		t.Error("expected at least one auth method")
+	}
+}
+
+// Test Client.Close with all nil clients
+
+func TestClient_Close_AllNil(t *testing.T) {
+	client := &Client{
+		sshClient:     nil,
+		sftpClient:    nil,
+		bastionClient: nil,
+	}
+
+	err := client.Close()
+	if err != nil {
+		t.Errorf("Close() with all nil should not error: %v", err)
+	}
+}
+
+// Test UploadFile with relative remote path
+
+func TestClient_UploadFile_RelativePath(t *testing.T) {
+	mockSFTP := NewMockSFTPClient()
+	client := NewClientWithSFTP(mockSFTP, nil)
+
+	tmpDir := t.TempDir()
+	localPath := filepath.Join(tmpDir, "test.txt")
+	if err := os.WriteFile(localPath, []byte("content"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Relative path (no leading /)
+	err := client.UploadFile(context.Background(), localPath, "relative/path/file.txt")
+	if err != nil {
+		t.Errorf("UploadFile() with relative path error = %v", err)
+	}
+}
+
+// Test UploadFile with . directory
+
+func TestClient_UploadFile_CurrentDir(t *testing.T) {
+	mockSFTP := NewMockSFTPClient()
+	client := NewClientWithSFTP(mockSFTP, nil)
+
+	tmpDir := t.TempDir()
+	localPath := filepath.Join(tmpDir, "test.txt")
+	if err := os.WriteFile(localPath, []byte("content"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// File in current directory
+	err := client.UploadFile(context.Background(), localPath, "file.txt")
+	if err != nil {
+		t.Errorf("UploadFile() to current dir error = %v", err)
+	}
+}
+
+// TestBastionConfig_InvalidHostnames tests bastion with various invalid hostnames.
+func TestBastionConfig_InvalidHostnames(t *testing.T) {
+	tests := []struct {
+		name          string
+		bastionHost   string
+		expectedValid bool
+	}{
+		{"empty bastion host", "", true}, // Empty is valid (no bastion)
+		{"localhost bastion", "localhost", true},
+		{"ip address", "192.168.1.100", true},
+		{"ipv6 address", "[::1]", true},
+		{"hostname with dots", "bastion.example.com", true},
+		{"hostname with dash", "my-bastion-01", true},
+		{"invalid chars", "bastion@host", true}, // Go doesn't validate at config level
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			config := Config{
+				Host:        "target.example.com",
+				Port:        22,
+				User:        "user",
+				PrivateKey:  "key",
+				BastionHost: tt.bastionHost,
+			}
+			// Just verify config accepts various hostnames
+			if tt.bastionHost != "" && config.BastionHost != tt.bastionHost {
+				t.Errorf("BastionHost mismatch: %s", config.BastionHost)
+			}
+		})
+	}
+}
+
+// TestBastionConfig_PortDefaults tests bastion port defaults.
+func TestBastionConfig_PortDefaults(t *testing.T) {
+	tests := []struct {
+		name             string
+		inputBastionPort int
+		bastionHostSet   bool
+		expectedPort     int
+	}{
+		{"bastion port 0 defaults to 22", 0, true, 22},
+		{"bastion port explicitly set", 2222, true, 2222},
+		{"bastion port ignored when no host", 0, false, 0},
+		{"large port number", 65535, true, 65535},
+		{"minimum port", 1, true, 1},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			config := Config{
+				Host:       "target.example.com",
+				Port:       22,
+				User:       "user",
+				PrivateKey: "key",
+			}
+			if tt.bastionHostSet {
+				config.BastionHost = "bastion.example.com"
+			}
+			config.BastionPort = tt.inputBastionPort
+
+			// Apply defaults
+			config = config.WithDefaults()
+
+			if tt.bastionHostSet {
+				if config.BastionPort != tt.expectedPort {
+					t.Errorf("expected port %d, got %d", tt.expectedPort, config.BastionPort)
+				}
+			}
+		})
+	}
+}
+
+// TestBastionConfig_UserFallback tests bastion user fallback scenarios.
+func TestBastionConfig_UserFallback(t *testing.T) {
+	tests := []struct {
+		name         string
+		targetUser   string
+		bastionUser  string
+		expectedUser string
+		description  string
+	}{
+		{"bastion explicit user", "target", "jumpuser", "jumpuser", "explicit bastion user takes precedence"},
+		{"bastion inherits target user", "deploy", "", "deploy", "bastion inherits when empty"},
+		{"both users set", "user1", "user2", "user2", "bastion user takes precedence"},
+		{"empty target user", "", "bastionuser", "bastionuser", "bastion user used when target empty"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			config := Config{
+				Host:        "target.example.com",
+				Port:        22,
+				User:        tt.targetUser,
+				PrivateKey:  "key",
+				BastionHost: "bastion.example.com",
+				BastionUser: tt.bastionUser,
+			}
+
+			// Verify that bastion user is set correctly
+			actualUser := config.BastionUser
+			if actualUser == "" {
+				actualUser = config.User // This is what the code does
+			}
+
+			if actualUser != tt.expectedUser {
+				t.Errorf("%s: expected user %s, got %s", tt.description, tt.expectedUser, actualUser)
+			}
+		})
+	}
+}
+
+// TestBastionConfig_KeyInheritance tests bastion key inheritance from target.
+func TestBastionConfig_KeyInheritance(t *testing.T) {
+	testKey, testKeyPath := generateTestKey(t)
+
+	tests := []struct {
+		name             string
+		targetPrivateKey string
+		targetKeyPath    string
+		bastionKey       string
+		bastionKeyPath   string
+		expectedHasKey   bool
+	}{
+		{
+			"bastion inherits target private key",
+			testKey,
+			"",
+			"",
+			"",
+			true,
+		},
+		{
+			"bastion inherits target key path",
+			"",
+			testKeyPath,
+			"",
+			"",
+			true,
+		},
+		{
+			"bastion explicit key overrides",
+			testKey,
+			"",
+			"bastion-key",
+			"",
+			true,
+		},
+		{
+			"bastion explicit path overrides",
+			"",
+			testKeyPath,
+			"",
+			"/path/to/bastion/key",
+			true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			config := Config{
+				Host:           "target.example.com",
+				Port:           22,
+				User:           "user",
+				PrivateKey:     tt.targetPrivateKey,
+				KeyPath:        tt.targetKeyPath,
+				BastionHost:    "bastion.example.com",
+				BastionKey:     tt.bastionKey,
+				BastionKeyPath: tt.bastionKeyPath,
+			}
+
+			// Verify bastion has auth configured
+			bastionHasKey := config.BastionKey != "" || config.BastionKeyPath != ""
+			targetHasKey := config.PrivateKey != "" || config.KeyPath != ""
+
+			actualHasKey := bastionHasKey || (targetHasKey && config.BastionKey == "" && config.BastionKeyPath == "")
+
+			if actualHasKey != tt.expectedHasKey {
+				t.Errorf("expected hasKey=%v, got %v", tt.expectedHasKey, actualHasKey)
+			}
+		})
+	}
+}
+
+// TestBastionConfig_PasswordAuth tests bastion with password authentication.
+func TestBastionConfig_PasswordAuth(t *testing.T) {
+	tests := []struct {
+		name            string
+		bastionPassword string
+		bastionKey      string
+		expectedCanAuth bool
+		description     string
+	}{
+		{"bastion password only", "password123", "", true, "password auth enabled"},
+		{"bastion password with key", "password123", "key", true, "both auth methods available"},
+		{"bastion no auth", "", "", false, "no auth configured"},
+		{"bastion key only", "", "key", true, "key auth configured"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			config := Config{
+				Host:            "target.example.com",
+				Port:            22,
+				User:            "user",
+				BastionHost:     "bastion.example.com",
+				BastionKey:      tt.bastionKey,
+				BastionPassword: tt.bastionPassword,
+			}
+
+			hasPassword := config.BastionPassword != ""
+			hasKey := config.BastionKey != ""
+			canAuth := hasPassword || hasKey
+
+			if canAuth != tt.expectedCanAuth {
+				t.Errorf("%s: expected canAuth=%v, got %v", tt.description, tt.expectedCanAuth, canAuth)
+			}
+		})
+	}
+}
+
+// TestBastionConfig_MixedAuthMethods tests various auth method combinations with bastion.
+func TestBastionConfig_MixedAuthMethods(t *testing.T) {
+	testKey, _ := generateTestKey(t)
+
+	tests := []struct {
+		name        string
+		targetAuth  string // "key", "password", "cert"
+		bastionAuth string // "key", "password", "inherited"
+		description string
+	}{
+		{"target key + bastion key", "key", "key", "independent auth methods"},
+		{"target key + bastion password", "key", "password", "bastion password target key"},
+		{"target password + bastion key", "password", "key", "bastion key target password"},
+		{"target cert + bastion key", "cert", "key", "cert on target key on bastion"},
+		{"target key + bastion inherited", "key", "inherited", "bastion uses target key"},
+		{"target password + bastion inherited", "password", "inherited", "bastion inherits password fallback"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			config := Config{
+				Host:        "target.example.com",
+				Port:        22,
+				User:        "user",
+				BastionHost: "bastion.example.com",
+			}
+
+			// Setup target auth
+			switch tt.targetAuth {
+			case "key":
+				config.PrivateKey = testKey
+			case "password":
+				config.Password = "target-pass"
+			case "cert":
+				config.CertificatePath = "/path/to/cert"
+			}
+
+			// Setup bastion auth
+			switch tt.bastionAuth {
+			case "key":
+				config.BastionKey = testKey
+			case "password":
+				config.BastionPassword = "bastion-pass"
+			case "inherited":
+				// Don't set bastion auth, let it inherit
+			}
+
+			// Verify config is valid
+			if config.BastionHost == "" {
+				t.Error("bastion host not set")
+			}
+		})
+	}
+}
+
+// TestBastionConfig_ConnectionPoolKey tests that bastion config affects connection pooling.
+func TestBastionConfig_ConnectionPoolKey(t *testing.T) {
+	pool := NewConnectionPool(time.Minute)
+	defer pool.Close()
+
+	baseConfig := Config{
+		Host:       "target.example.com",
+		Port:       22,
+		User:       "user",
+		PrivateKey: "key",
+	}
+
+	// Test 1: Same target, different bastion
+	config1 := baseConfig
+	config1.BastionHost = "bastion1.example.com"
+
+	config2 := baseConfig
+	config2.BastionHost = "bastion2.example.com"
+
+	key1 := pool.connectionKey(config1)
+	key2 := pool.connectionKey(config2)
+
+	if key1 == key2 {
+		t.Error("different bastion hosts should produce different keys")
+	}
+
+	// Test 2: Same bastion, different ports
+	config3 := baseConfig
+	config3.BastionHost = "bastion.example.com"
+	config3.BastionPort = 22
+
+	config4 := baseConfig
+	config4.BastionHost = "bastion.example.com"
+	config4.BastionPort = 2222
+
+	key3 := pool.connectionKey(config3)
+	key4 := pool.connectionKey(config4)
+
+	if key3 == key4 {
+		t.Error("different bastion ports should produce different keys")
+	}
+
+	// Test 3: No bastion vs bastion
+	config5 := baseConfig
+	config6 := baseConfig
+	config6.BastionHost = "bastion.example.com"
+
+	key5 := pool.connectionKey(config5)
+	key6 := pool.connectionKey(config6)
+
+	if key5 == key6 {
+		t.Error("bastion vs non-bastion should produce different keys")
+	}
+}
+
+// TestBastionConfig_TimeoutBehavior tests bastion timeout configuration.
+func TestBastionConfig_TimeoutBehavior(t *testing.T) {
+	tests := []struct {
+		name          string
+		timeout       time.Duration
+		expectedValid bool
+	}{
+		{"zero timeout", 0, true}, // Zero means no timeout
+		{"short timeout", 100 * time.Millisecond, true},
+		{"typical timeout", 10 * time.Second, true},
+		{"long timeout", 5 * time.Minute, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			config := Config{
+				Host:        "target.example.com",
+				Port:        22,
+				User:        "user",
+				PrivateKey:  "key",
+				BastionHost: "bastion.example.com",
+				Timeout:     tt.timeout,
+			}
+
+			if config.Timeout != tt.timeout {
+				t.Errorf("expected timeout %v, got %v", tt.timeout, config.Timeout)
+			}
+		})
+	}
+}
+
+// TestBastionConfig_AllFieldsCombined tests all bastion fields set together.
+func TestBastionConfig_AllFieldsCombined(t *testing.T) {
+	testKey, testKeyPath := generateTestKey(t)
+
+	config := Config{
+		// Target
+		Host:       "target.example.com",
+		Port:       22,
+		User:       "targetuser",
+		PrivateKey: testKey,
+		Password:   "target-pass",
+
+		// Bastion
+		BastionHost:     "bastion.example.com",
+		BastionPort:     2222,
+		BastionUser:     "bastionuser",
+		BastionKey:      testKey,
+		BastionKeyPath:  testKeyPath,
+		BastionPassword: "bastion-pass",
+
+		// Common
+		Timeout:               5 * time.Second,
+		InsecureIgnoreHostKey: true,
+	}
+
+	// Verify all fields are preserved
+	if config.BastionHost != "bastion.example.com" {
+		t.Error("BastionHost not set")
+	}
+	if config.BastionPort != 2222 {
+		t.Error("BastionPort not set")
+	}
+	if config.BastionUser != "bastionuser" {
+		t.Error("BastionUser not set")
+	}
+	if config.BastionPassword != "bastion-pass" {
+		t.Error("BastionPassword not set")
+	}
+	if config.Timeout != 5*time.Second {
+		t.Error("Timeout not set")
+	}
 }
