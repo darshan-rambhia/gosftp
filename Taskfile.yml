@@ -9,12 +9,12 @@ tasks:
   test:
     desc: Run unit tests (no Docker required)
     cmds:
-      - go test -short -v ./...
+      - go test -short -race -v ./...
 
   test:all:
     desc: Run all tests including integration tests (requires Docker)
     cmds:
-      - go test -v ./... -timeout 30m
+      - go test -race -v ./... -timeout 30m
 
   test:bench:
     desc: "Run benchmarks. Examples: task bench, task bench FILTER=Upload, task bench FILTER=LocalHash (no Docker)"
@@ -22,7 +22,7 @@ tasks:
       FILTER: '{{.FILTER | default "."}}'
       COUNT: '{{.COUNT | default "1"}}'
     cmds:
-      - go test -bench={{.FILTER}} -benchmem -count={{.COUNT}} ./... -timeout 30m
+      - go test -race -bench={{.FILTER}} -benchmem -count={{.COUNT}} ./... -timeout 30m
 
   test:fuzz:
     desc: "Run fuzz tests. Example: task fuzz TARGET=FuzzExpandPath TIME=30s"
@@ -30,13 +30,13 @@ tasks:
       TARGET: '{{.TARGET | default "FuzzExpandPath"}}'
       TIME: '{{.TIME | default "30s"}}'
     cmds:
-      - go test -fuzz={{.TARGET}} -fuzztime={{.TIME}} ./...
+      - go test -race -fuzz={{.TARGET}} -fuzztime={{.TIME}} ./...
 
 
   test:coverage:
     desc: Generate coverage report (requires Docker)
     cmds:
-      - go test -tags=integration -coverprofile=./.out/coverage.out -covermode=atomic ./...
+      - go test -race -tags=integration -coverprofile=./.out/coverage.out -covermode=atomic ./...
       - go tool cover -html=./.out/coverage.out -o coverage.html
       - go tool cover -func=./.out/coverage.out | grep total | awk '{print "Total coverage:", $3}'
 

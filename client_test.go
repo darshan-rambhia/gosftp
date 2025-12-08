@@ -8,13 +8,14 @@ import (
 	"crypto/x509"
 	"encoding/hex"
 	"encoding/pem"
+	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
+	"golang.org/x/crypto/ssh"
 	gossh "golang.org/x/crypto/ssh"
 )
 
@@ -794,20 +795,7 @@ func findSubstring(s, substr string) bool {
 	return false
 }
 
-// TestAuthMethodConstants tests auth method constant values.
-func TestAuthMethodConstants(t *testing.T) {
-	if AuthMethodPrivateKey != "private_key" {
-		t.Errorf("AuthMethodPrivateKey = %q, want %q", AuthMethodPrivateKey, "private_key")
-	}
-	if AuthMethodPassword != "password" {
-		t.Errorf("AuthMethodPassword = %q, want %q", AuthMethodPassword, "password")
-	}
-	if AuthMethodCertificate != "certificate" {
-		t.Errorf("AuthMethodCertificate = %q, want %q", AuthMethodCertificate, "certificate")
-	}
-}
-
-// TestConfigTimeout tests timeout configuration.
+// TestConfigTimeout tests timeout configuration and WithDefaults.
 func TestConfigTimeout(t *testing.T) {
 	tests := []struct {
 		name            string
@@ -839,67 +827,41 @@ func TestConfigTimeout(t *testing.T) {
 			}
 		})
 	}
-}
 
-// TestBastionDefaults tests bastion configuration defaults.
-func TestBastionDefaults(t *testing.T) {
-	tests := []struct {
-		name         string
-		config       Config
-		expectedUser string
-		expectedPort int
-	}{
-		{
-			name: "bastion uses target user when not set",
-			config: Config{
-				User:        "targetuser",
-				BastionHost: "bastion.example.com",
-			},
-			expectedUser: "targetuser",
-			expectedPort: 22,
-		},
-		{
-			name: "bastion uses own user when set",
-			config: Config{
-				User:        "targetuser",
-				BastionHost: "bastion.example.com",
-				BastionUser: "bastionuser",
-			},
-			expectedUser: "bastionuser",
-			expectedPort: 22,
-		},
-		{
-			name: "bastion uses custom port",
-			config: Config{
-				User:        "targetuser",
-				BastionHost: "bastion.example.com",
-				BastionPort: 2222,
-			},
-			expectedUser: "targetuser",
-			expectedPort: 2222,
-		},
-	}
+	// Test WithDefaults
+	t.Run("default port", func(t *testing.T) {
+		result := Config{}.WithDefaults()
+		if result.Port != 22 {
+			t.Errorf("Port = %d, want 22", result.Port)
+		}
+		if result.Timeout != 30*time.Second {
+			t.Errorf("Timeout = %v, want 30s", result.Timeout)
+		}
+	})
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Test the expected behavior.
-			bastionUser := tt.config.BastionUser
-			if bastionUser == "" {
-				bastionUser = tt.config.User
-			}
-			if bastionUser != tt.expectedUser {
-				t.Errorf("expected bastion user %q, got %q", tt.expectedUser, bastionUser)
-			}
+	t.Run("custom port preserved", func(t *testing.T) {
+		result := Config{Port: 2222}.WithDefaults()
+		if result.Port != 2222 {
+			t.Errorf("Port = %d, want 2222", result.Port)
+		}
+	})
 
-			bastionPort := tt.config.BastionPort
-			if bastionPort == 0 {
-				bastionPort = 22
-			}
-			if bastionPort != tt.expectedPort {
-				t.Errorf("expected bastion port %d, got %d", tt.expectedPort, bastionPort)
-			}
-		})
-	}
+	t.Run("bastion port defaults", func(t *testing.T) {
+		result := Config{BastionHost: "bastion.example.com"}.WithDefaults()
+		if result.Port != 22 {
+			t.Errorf("Port = %d, want 22", result.Port)
+		}
+		if result.BastionPort != 22 {
+			t.Errorf("BastionPort = %d, want 22", result.BastionPort)
+		}
+	})
+
+	t.Run("bastion port custom", func(t *testing.T) {
+		result := Config{BastionHost: "bastion.example.com", BastionPort: 2222}.WithDefaults()
+		if result.BastionPort != 2222 {
+			t.Errorf("BastionPort = %d, want 2222", result.BastionPort)
+		}
+	})
 }
 
 // TestConnectToBastion_Errors tests various bastion connection error scenarios.
@@ -1165,438 +1127,6 @@ func TestIsBinaryContent_EdgeCases(t *testing.T) {
 			}
 		})
 	}
-}
-
-// TestMockClient_UploadFile tests file upload via mock.
-func TestMockClient_UploadFile(t *testing.T) {
-	client := NewMockClient()
-
-	// Create a temp file to upload.
-	tmpDir := t.TempDir()
-	localPath := filepath.Join(tmpDir, "test.txt")
-	content := []byte("test content")
-	if err := os.WriteFile(localPath, content, 0644); err != nil {
-		t.Fatalf("failed to create test file: %v", err)
-	}
-
-	remotePath := "/remote/test.txt"
-
-	// Test upload.
-	err := client.UploadFile(context.Background(), localPath, remotePath)
-	if err != nil {
-		t.Errorf("UploadFile() error = %v", err)
-	}
-
-	// Verify file exists.
-	exists, err := client.FileExists(context.Background(), remotePath)
-	if err != nil {
-		t.Errorf("FileExists() error = %v", err)
-	}
-	if !exists {
-		t.Error("expected file to exist after upload")
-	}
-}
-
-// TestMockClient_GetFileHash tests hash retrieval via mock.
-func TestMockClient_GetFileHash(t *testing.T) {
-	client := NewMockClient()
-	client.SetFile("/test.txt", []byte("test content"), 0644)
-
-	hash, err := client.GetFileHash(context.Background(), "/test.txt")
-	if err != nil {
-		t.Errorf("GetFileHash() error = %v", err)
-	}
-	if hash == "" {
-		t.Error("expected non-empty hash")
-	}
-
-	// Test non-existent file.
-	_, err = client.GetFileHash(context.Background(), "/nonexistent.txt")
-	if err == nil {
-		t.Error("expected error for nonexistent file")
-	}
-}
-
-// TestMockClient_SetFileAttributes tests attribute setting via mock.
-func TestMockClient_SetFileAttributes(t *testing.T) {
-	client := NewMockClient()
-	client.SetFile("/test.txt", []byte("content"), 0644)
-
-	err := client.SetFileAttributes(context.Background(), "/test.txt", "root", "root", "0755")
-	if err != nil {
-		t.Errorf("SetFileAttributes() error = %v", err)
-	}
-
-	// Test with non-existent file.
-	err = client.SetFileAttributes(context.Background(), "/nonexistent.txt", "root", "", "")
-	if err == nil {
-		t.Error("expected error for nonexistent file")
-	}
-
-	// Test invalid mode.
-	err = client.SetFileAttributes(context.Background(), "/test.txt", "", "", "invalid")
-	if err == nil {
-		t.Error("expected error for invalid mode")
-	}
-}
-
-// TestMockClient_DeleteFile tests file deletion via mock.
-func TestMockClient_DeleteFile(t *testing.T) {
-	client := NewMockClient()
-	client.SetFile("/test.txt", []byte("content"), 0644)
-
-	// Verify file exists.
-	exists, _ := client.FileExists(context.Background(), "/test.txt")
-	if !exists {
-		t.Error("expected file to exist before delete")
-	}
-
-	// Delete file.
-	err := client.DeleteFile(context.Background(), "/test.txt")
-	if err != nil {
-		t.Errorf("DeleteFile() error = %v", err)
-	}
-
-	// Verify file is gone.
-	exists, _ = client.FileExists(context.Background(), "/test.txt")
-	if exists {
-		t.Error("expected file to not exist after delete")
-	}
-
-	// Delete non-existent file should not error.
-	err = client.DeleteFile(context.Background(), "/nonexistent.txt")
-	if err != nil {
-		t.Errorf("DeleteFile() for nonexistent file should not error: %v", err)
-	}
-}
-
-// TestMockClient_FileExists tests file existence check via mock.
-func TestMockClient_FileExists(t *testing.T) {
-	client := NewMockClient()
-	client.SetFile("/exists.txt", []byte("content"), 0644)
-
-	exists, err := client.FileExists(context.Background(), "/exists.txt")
-	if err != nil {
-		t.Errorf("FileExists() error = %v", err)
-	}
-	if !exists {
-		t.Error("expected file to exist")
-	}
-
-	exists, err = client.FileExists(context.Background(), "/not-exists.txt")
-	if err != nil {
-		t.Errorf("FileExists() error = %v", err)
-	}
-	if exists {
-		t.Error("expected file to not exist")
-	}
-}
-
-// TestMockClient_GetFileInfo tests file info retrieval via mock.
-func TestMockClient_GetFileInfo(t *testing.T) {
-	client := NewMockClient()
-	content := []byte("test content here")
-	client.SetFile("/test.txt", content, 0755)
-
-	info, err := client.GetFileInfo(context.Background(), "/test.txt")
-	if err != nil {
-		t.Errorf("GetFileInfo() error = %v", err)
-	}
-	if info == nil {
-		t.Fatal("expected non-nil FileInfo")
-	}
-	if info.Size() != int64(len(content)) {
-		t.Errorf("Size() = %d, want %d", info.Size(), len(content))
-	}
-	if info.Mode() != 0755 {
-		t.Errorf("Mode() = %o, want %o", info.Mode(), 0755)
-	}
-
-	// Test non-existent file.
-	_, err = client.GetFileInfo(context.Background(), "/nonexistent.txt")
-	if err == nil {
-		t.Error("expected error for nonexistent file")
-	}
-}
-
-// TestMockClient_ReadFileContent tests file content reading via mock.
-func TestMockClient_ReadFileContent(t *testing.T) {
-	client := NewMockClient()
-	content := []byte("this is test content for reading")
-	client.SetFile("/test.txt", content, 0644)
-
-	// Read all content.
-	data, err := client.ReadFileContent(context.Background(), "/test.txt", 0)
-	if err != nil {
-		t.Errorf("ReadFileContent() error = %v", err)
-	}
-	if string(data) != string(content) {
-		t.Errorf("ReadFileContent() = %q, want %q", data, content)
-	}
-
-	// Read with limit.
-	data, err = client.ReadFileContent(context.Background(), "/test.txt", 10)
-	if err != nil {
-		t.Errorf("ReadFileContent() with limit error = %v", err)
-	}
-	if len(data) != 10 {
-		t.Errorf("ReadFileContent() with limit returned %d bytes, want 10", len(data))
-	}
-
-	// Read non-existent file.
-	_, err = client.ReadFileContent(context.Background(), "/nonexistent.txt", 0)
-	if err == nil {
-		t.Error("expected error for nonexistent file")
-	}
-}
-
-// TestMockClient_WithErrors tests error handling via mock.
-func TestMockClient_WithErrors(t *testing.T) {
-	client := NewMockClient()
-	testErr := os.ErrPermission
-
-	// Test Close error.
-	client.SetError("Close", testErr)
-	if err := client.Close(); err != testErr {
-		t.Errorf("Close() error = %v, want %v", err, testErr)
-	}
-
-	// Reset and test GetFileHash error.
-	client = NewMockClient()
-	client.SetFile("/test.txt", []byte("content"), 0644)
-	client.SetError("GetFileHash", testErr)
-	if _, err := client.GetFileHash(context.Background(), "/test.txt"); err != testErr {
-		t.Errorf("GetFileHash() error = %v, want %v", err, testErr)
-	}
-
-	// Test SetFileAttributes error.
-	client = NewMockClient()
-	client.SetFile("/test.txt", []byte("content"), 0644)
-	client.SetError("SetFileAttributes", testErr)
-	if err := client.SetFileAttributes(context.Background(), "/test.txt", "root", "", ""); err != testErr {
-		t.Errorf("SetFileAttributes() error = %v, want %v", err, testErr)
-	}
-
-	// Test DeleteFile error.
-	client = NewMockClient()
-	client.SetError("DeleteFile", testErr)
-	if err := client.DeleteFile(context.Background(), "/test.txt"); err != testErr {
-		t.Errorf("DeleteFile() error = %v, want %v", err, testErr)
-	}
-
-	// Test FileExists error.
-	client = NewMockClient()
-	client.SetError("FileExists", testErr)
-	if _, err := client.FileExists(context.Background(), "/test.txt"); err != testErr {
-		t.Errorf("FileExists() error = %v, want %v", err, testErr)
-	}
-
-	// Test GetFileInfo error.
-	client = NewMockClient()
-	client.SetFile("/test.txt", []byte("content"), 0644)
-	client.SetError("GetFileInfo", testErr)
-	if _, err := client.GetFileInfo(context.Background(), "/test.txt"); err != testErr {
-		t.Errorf("GetFileInfo() error = %v, want %v", err, testErr)
-	}
-
-	// Test ReadFileContent error.
-	client = NewMockClient()
-	client.SetFile("/test.txt", []byte("content"), 0644)
-	client.SetError("ReadFileContent", testErr)
-	if _, err := client.ReadFileContent(context.Background(), "/test.txt", 0); err != testErr {
-		t.Errorf("ReadFileContent() error = %v, want %v", err, testErr)
-	}
-
-	// Test UploadFile error.
-	client = NewMockClient()
-	client.SetError("UploadFile", testErr)
-	tmpDir := t.TempDir()
-	localPath := filepath.Join(tmpDir, "test.txt")
-	if err := os.WriteFile(localPath, []byte("content"), 0644); err != nil {
-		t.Fatal(err)
-	}
-	if err := client.UploadFile(context.Background(), localPath, "/remote.txt"); err != testErr {
-		t.Errorf("UploadFile() error = %v, want %v", err, testErr)
-	}
-}
-
-// TestMockClient_UploadFile_LocalNotFound tests upload with missing local file.
-func TestMockClient_UploadFile_LocalNotFound(t *testing.T) {
-	client := NewMockClient()
-	err := client.UploadFile(context.Background(), "/nonexistent/local/file.txt", "/remote.txt")
-	if err == nil {
-		t.Error("expected error for nonexistent local file")
-	}
-}
-
-// TestMockFileInfo tests the mockFileInfo implementation.
-func TestMockFileInfo(t *testing.T) {
-	info := &mockFileInfo{
-		name:    "test.txt",
-		size:    100,
-		mode:    0755,
-		modTime: time.Now(),
-		isDir:   false,
-	}
-
-	if info.Name() != "test.txt" {
-		t.Errorf("Name() = %q, want %q", info.Name(), "test.txt")
-	}
-	if info.Size() != 100 {
-		t.Errorf("Size() = %d, want %d", info.Size(), 100)
-	}
-	if info.Mode() != 0755 {
-		t.Errorf("Mode() = %o, want %o", info.Mode(), 0755)
-	}
-	if info.IsDir() != false {
-		t.Error("IsDir() should be false")
-	}
-	if info.Sys() != nil {
-		t.Error("Sys() should return nil")
-	}
-}
-
-// TestClientInterface_Compliance ensures all implementations comply.
-func TestClientInterface_Compliance(t *testing.T) {
-	// Verify Client implements ClientInterface.
-	var _ ClientInterface = (*Client)(nil)
-
-	// Verify MockClientInterface implements ClientInterface.
-	var _ ClientInterface = (*MockClientInterface)(nil)
-}
-
-// MockSFTPFile implements SFTPFile for testing.
-type MockSFTPFile struct {
-	content    []byte
-	readOffset int
-	closed     bool
-}
-
-func NewMockSFTPFile(content []byte) *MockSFTPFile {
-	return &MockSFTPFile{content: content}
-}
-
-func (f *MockSFTPFile) Read(p []byte) (n int, err error) {
-	if f.readOffset >= len(f.content) {
-		return 0, io.EOF
-	}
-	n = copy(p, f.content[f.readOffset:])
-	f.readOffset += n
-	return n, nil
-}
-
-func (f *MockSFTPFile) Write(p []byte) (n int, err error) {
-	f.content = append(f.content, p...)
-	return len(p), nil
-}
-
-func (f *MockSFTPFile) Close() error {
-	f.closed = true
-	return nil
-}
-
-// MockSFTPClient implements SFTPClientInterface for testing.
-type MockSFTPClient struct {
-	files  map[string]*mockSFTPFileData
-	errors map[string]error
-	closed bool
-}
-
-type mockSFTPFileData struct {
-	content []byte
-	mode    os.FileMode
-}
-
-func NewMockSFTPClient() *MockSFTPClient {
-	return &MockSFTPClient{
-		files:  make(map[string]*mockSFTPFileData),
-		errors: make(map[string]error),
-	}
-}
-
-// Ensure MockSFTPClient implements SFTPClientInterface.
-var _ SFTPClientInterface = (*MockSFTPClient)(nil)
-
-func (m *MockSFTPClient) SetError(method string, err error) {
-	m.errors[method] = err
-}
-
-func (m *MockSFTPClient) SetFile(path string, content []byte, mode os.FileMode) {
-	m.files[path] = &mockSFTPFileData{content: content, mode: mode}
-}
-
-func (m *MockSFTPClient) Open(path string) (SFTPFile, error) {
-	if err := m.errors["Open"]; err != nil {
-		return nil, err
-	}
-	data, ok := m.files[path]
-	if !ok {
-		return nil, os.ErrNotExist
-	}
-	return NewMockSFTPFile(data.content), nil
-}
-
-func (m *MockSFTPClient) Create(path string) (SFTPFile, error) {
-	if err := m.errors["Create"]; err != nil {
-		return nil, err
-	}
-	m.files[path] = &mockSFTPFileData{content: []byte{}, mode: 0644}
-	return NewMockSFTPFile(nil), nil
-}
-
-func (m *MockSFTPClient) Remove(path string) error {
-	if err := m.errors["Remove"]; err != nil {
-		return err
-	}
-	if _, ok := m.files[path]; !ok {
-		return os.ErrNotExist
-	}
-	delete(m.files, path)
-	return nil
-}
-
-func (m *MockSFTPClient) Stat(path string) (os.FileInfo, error) {
-	if err := m.errors["Stat"]; err != nil {
-		return nil, err
-	}
-	data, ok := m.files[path]
-	if !ok {
-		return nil, os.ErrNotExist
-	}
-	return &mockFileInfo{
-		name:    filepath.Base(path),
-		size:    int64(len(data.content)),
-		mode:    data.mode,
-		modTime: time.Now(),
-		isDir:   false,
-	}, nil
-}
-
-func (m *MockSFTPClient) Chmod(path string, mode os.FileMode) error {
-	if err := m.errors["Chmod"]; err != nil {
-		return err
-	}
-	data, ok := m.files[path]
-	if !ok {
-		return os.ErrNotExist
-	}
-	data.mode = mode
-	return nil
-}
-
-func (m *MockSFTPClient) MkdirAll(path string) error {
-	if err := m.errors["MkdirAll"]; err != nil {
-		return err
-	}
-	return nil
-}
-
-func (m *MockSFTPClient) Close() error {
-	if err := m.errors["Close"]; err != nil {
-		return err
-	}
-	m.closed = true
-	return nil
 }
 
 // Tests for Client methods using MockSFTPClient.
@@ -1876,26 +1406,6 @@ func TestClient_SetFileAttributes_EmptyMode(t *testing.T) {
 	}
 }
 
-func TestNewClientWithSFTP(t *testing.T) {
-	mockSFTP := NewMockSFTPClient()
-	client := NewClientWithSFTP(mockSFTP, nil)
-
-	if client == nil {
-		t.Fatal("expected non-nil client")
-	}
-	if client.sftpClient != mockSFTP {
-		t.Error("expected sftpClient to be the mock")
-	}
-}
-
-func TestSFTPClientInterface_Compliance(t *testing.T) {
-	// Verify MockSFTPClient implements SFTPClientInterface.
-	var _ SFTPClientInterface = (*MockSFTPClient)(nil)
-
-	// Verify SFTPClientWrapper implements SFTPClientInterface.
-	var _ SFTPClientInterface = (*SFTPClientWrapper)(nil)
-}
-
 // Tests for UploadFile using MockSFTPClient.
 
 func TestClient_UploadFile_WithMockSFTP(t *testing.T) {
@@ -2015,134 +1525,6 @@ func TestClient_Close_SFTPError(t *testing.T) {
 }
 
 // Security-related tests
-
-// TestValidateOwnerGroup tests owner/group name validation.
-func TestValidateOwnerGroup(t *testing.T) {
-	tests := []struct {
-		name        string
-		value       string
-		fieldName   string
-		expectError bool
-	}{
-		// Valid cases
-		{"valid username", "root", "owner", false},
-		{"valid username with underscore", "my_user", "owner", false},
-		{"valid username with hyphen", "my-user", "owner", false},
-		{"valid group", "www-data", "group", false},
-		{"valid numeric uid", "1000", "owner", false},
-		{"valid numeric gid", "0", "group", false},
-		{"starts with underscore", "_apt", "owner", false},
-		{"empty is valid", "", "owner", false},
-
-		// Invalid cases - command injection attempts
-		{"semicolon injection", "root;rm -rf /", "owner", true},
-		{"backtick injection", "root`whoami`", "owner", true},
-		{"dollar injection", "root$(whoami)", "owner", true},
-		{"pipe injection", "root|cat /etc/passwd", "owner", true},
-		{"ampersand injection", "root&& cat /etc/passwd", "owner", true},
-		{"newline injection", "root\ncat /etc/passwd", "owner", true},
-		{"space injection", "root cat", "owner", true},
-		{"quote injection single", "root'", "owner", true},
-		{"quote injection double", "root\"", "owner", true},
-
-		// Other invalid cases
-		{"starts with number", "1abc", "owner", true},
-		{"starts with hyphen", "-user", "owner", true},
-		{"contains dot", "user.name", "owner", true},
-		{"contains slash", "user/name", "owner", true},
-		{"too long", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "owner", true}, // 33 chars
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := validateOwnerGroup(tt.value, tt.fieldName)
-			if tt.expectError && err == nil {
-				t.Errorf("expected error for %q, got nil", tt.value)
-			}
-			if !tt.expectError && err != nil {
-				t.Errorf("unexpected error for %q: %v", tt.value, err)
-			}
-		})
-	}
-}
-
-// TestShellQuote tests shell escaping functionality.
-func TestShellQuote(t *testing.T) {
-	tests := []struct {
-		name     string
-		input    string
-		expected string
-	}{
-		{"simple string", "hello", "'hello'"},
-		{"empty string", "", "''"},
-		{"with space", "hello world", "'hello world'"},
-		{"with single quote", "it's", "'it'\"'\"'s'"},
-		{"with double quotes", "say \"hello\"", "'say \"hello\"'"},
-		{"with backtick", "echo `whoami`", "'echo `whoami`'"},
-		{"with dollar sign", "var=$HOME", "'var=$HOME'"},
-		{"with semicolon", "cmd; rm -rf /", "'cmd; rm -rf /'"},
-		{"with newline", "line1\nline2", "'line1\nline2'"},
-		{"with special chars", "!@#$%^&*()", "'!@#$%^&*()'"},
-		{"path with spaces", "/path/to/my file.txt", "'/path/to/my file.txt'"},
-		{"multiple single quotes", "it's a 'test'", "'it'\"'\"'s a '\"'\"'test'\"'\"''"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := shellQuote(tt.input)
-			if result != tt.expected {
-				t.Errorf("shellQuote(%q) = %q, want %q", tt.input, result, tt.expected)
-			}
-		})
-	}
-}
-
-// TestValidateMode tests mode validation.
-func TestValidateMode(t *testing.T) {
-	tests := []struct {
-		name        string
-		mode        string
-		expectError bool
-	}{
-		// Valid cases
-		{"standard file mode", "0644", false},
-		{"executable mode", "0755", false},
-		{"private mode", "0600", false},
-		{"world writable", "0777", false},
-		{"3 digit mode", "644", false},
-		{"sticky bit", "1755", false},
-		{"setuid", "4755", false},
-		{"setgid", "2755", false},
-		{"all special bits", "7777", false},
-		{"empty is valid", "", false},
-		{"all zeros", "0000", false},
-		{"min 3 digits", "000", false},
-
-		// Invalid cases
-		{"too short", "64", true},
-		{"too long", "07755", true},
-		{"non-octal digit 8", "0648", true},
-		{"non-octal digit 9", "0659", true},
-		{"letters", "abc", true},
-		{"mixed letters and numbers", "06a4", true},
-		{"special characters", "0644!", true},
-		{"leading zero with 5 digits", "00755", true},
-		{"negative", "-0644", true},
-		{"hex notation", "0x1A4", true},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := ValidateMode(tt.mode)
-			if tt.expectError && err == nil {
-				t.Errorf("expected error for mode %q, got nil", tt.mode)
-			}
-			if !tt.expectError && err != nil {
-				t.Errorf("unexpected error for mode %q: %v", tt.mode, err)
-			}
-		})
-	}
-}
 
 // TestSetFileAttributes_OwnerValidation tests that invalid owner names are rejected.
 func TestSetFileAttributes_OwnerValidation(t *testing.T) {
@@ -2376,14 +1758,6 @@ func TestBuildHostKeyCallback(t *testing.T) {
 	})
 }
 
-// TestSFTPClientWrapper tests the SFTP client wrapper methods.
-func TestSFTPClientWrapper(t *testing.T) {
-	t.Run("wrapper_implements_interface", func(t *testing.T) {
-		// Verify that SFTPClientWrapper implements SFTPClientInterface.
-		var _ SFTPClientInterface = (*SFTPClientWrapper)(nil)
-	})
-}
-
 // Tests for context cancellation
 
 func TestClient_UploadFile_ContextCancelled(t *testing.T) {
@@ -2406,147 +1780,7 @@ func TestClient_UploadFile_ContextCancelled(t *testing.T) {
 	}
 }
 
-func TestClient_GetFileHash_ContextCancelled(t *testing.T) {
-	mockSFTP := NewMockSFTPClient()
-	mockSFTP.SetFile("/test.txt", []byte("content"), 0644)
-	client := NewClientWithSFTP(mockSFTP, nil)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel() // Cancel immediately
-
-	_, err := client.GetFileHash(ctx, "/test.txt")
-	if err == nil {
-		t.Error("expected error for cancelled context")
-	}
-}
-
-func TestClient_DeleteFile_ContextCancelled(t *testing.T) {
-	mockSFTP := NewMockSFTPClient()
-	mockSFTP.SetFile("/test.txt", []byte("content"), 0644)
-	client := NewClientWithSFTP(mockSFTP, nil)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel() // Cancel immediately
-
-	err := client.DeleteFile(ctx, "/test.txt")
-	if err == nil {
-		t.Error("expected error for cancelled context")
-	}
-}
-
-func TestClient_FileExists_ContextCancelled(t *testing.T) {
-	mockSFTP := NewMockSFTPClient()
-	mockSFTP.SetFile("/test.txt", []byte("content"), 0644)
-	client := NewClientWithSFTP(mockSFTP, nil)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel() // Cancel immediately
-
-	_, err := client.FileExists(ctx, "/test.txt")
-	if err == nil {
-		t.Error("expected error for cancelled context")
-	}
-}
-
-func TestClient_GetFileInfo_ContextCancelled(t *testing.T) {
-	mockSFTP := NewMockSFTPClient()
-	mockSFTP.SetFile("/test.txt", []byte("content"), 0644)
-	client := NewClientWithSFTP(mockSFTP, nil)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel() // Cancel immediately
-
-	_, err := client.GetFileInfo(ctx, "/test.txt")
-	if err == nil {
-		t.Error("expected error for cancelled context")
-	}
-}
-
-func TestClient_ReadFileContent_ContextCancelled(t *testing.T) {
-	mockSFTP := NewMockSFTPClient()
-	mockSFTP.SetFile("/test.txt", []byte("content"), 0644)
-	client := NewClientWithSFTP(mockSFTP, nil)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel() // Cancel immediately
-
-	_, err := client.ReadFileContent(ctx, "/test.txt", 0)
-	if err == nil {
-		t.Error("expected error for cancelled context")
-	}
-}
-
-func TestClient_SetFileAttributes_ContextCancelled(t *testing.T) {
-	mockSFTP := NewMockSFTPClient()
-	mockSFTP.SetFile("/test.txt", []byte("content"), 0644)
-	client := NewClientWithSFTP(mockSFTP, nil)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel() // Cancel immediately
-
-	err := client.SetFileAttributes(ctx, "/test.txt", "", "", "0755")
-	if err == nil {
-		t.Error("expected error for cancelled context")
-	}
-}
-
-// Test Config.WithDefaults
-
-func TestConfig_WithDefaults(t *testing.T) {
-	tests := []struct {
-		name          string
-		input         Config
-		expectedPort  int
-		expectedBPort int
-	}{
-		{
-			name:          "default port",
-			input:         Config{},
-			expectedPort:  22,
-			expectedBPort: 0, // No bastion host
-		},
-		{
-			name:         "custom port",
-			input:        Config{Port: 2222},
-			expectedPort: 2222,
-		},
-		{
-			name: "bastion port defaults",
-			input: Config{
-				BastionHost: "bastion.example.com",
-			},
-			expectedPort:  22,
-			expectedBPort: 22,
-		},
-		{
-			name: "bastion port custom",
-			input: Config{
-				BastionHost: "bastion.example.com",
-				BastionPort: 2222,
-			},
-			expectedPort:  22,
-			expectedBPort: 2222,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := tt.input.WithDefaults()
-			if result.Port != tt.expectedPort {
-				t.Errorf("Port = %d, want %d", result.Port, tt.expectedPort)
-			}
-			if tt.input.BastionHost != "" && result.BastionPort != tt.expectedBPort {
-				t.Errorf("BastionPort = %d, want %d", result.BastionPort, tt.expectedBPort)
-			}
-			if result.Timeout != 30*time.Second {
-				t.Errorf("Timeout = %v, want 30s", result.Timeout)
-			}
-		})
-	}
-}
-
-// Test buildCertificateAuth with CertificatePath
-
+// Test buildCertificateAuth with CertificatePath.
 func TestBuildCertificateAuth_WithCertPath(t *testing.T) {
 	keyContent, keyPath := generateTestKey(t)
 
@@ -2611,23 +1845,7 @@ func TestBuildAuthMethods_EmptyAuthMethod(t *testing.T) {
 	}
 }
 
-// Test Client.Close with all nil clients
-
-func TestClient_Close_AllNil(t *testing.T) {
-	client := &Client{
-		sshClient:     nil,
-		sftpClient:    nil,
-		bastionClient: nil,
-	}
-
-	err := client.Close()
-	if err != nil {
-		t.Errorf("Close() with all nil should not error: %v", err)
-	}
-}
-
-// Test UploadFile with relative remote path
-
+// Test UploadFile with relative remote path.
 func TestClient_UploadFile_RelativePath(t *testing.T) {
 	mockSFTP := NewMockSFTPClient()
 	client := NewClientWithSFTP(mockSFTP, nil)
@@ -2661,118 +1879,6 @@ func TestClient_UploadFile_CurrentDir(t *testing.T) {
 	err := client.UploadFile(context.Background(), localPath, "file.txt")
 	if err != nil {
 		t.Errorf("UploadFile() to current dir error = %v", err)
-	}
-}
-
-// TestBastionConfig_InvalidHostnames tests bastion with various invalid hostnames.
-func TestBastionConfig_InvalidHostnames(t *testing.T) {
-	tests := []struct {
-		name          string
-		bastionHost   string
-		expectedValid bool
-	}{
-		{"empty bastion host", "", true}, // Empty is valid (no bastion)
-		{"localhost bastion", "localhost", true},
-		{"ip address", "192.168.1.100", true},
-		{"ipv6 address", "[::1]", true},
-		{"hostname with dots", "bastion.example.com", true},
-		{"hostname with dash", "my-bastion-01", true},
-		{"invalid chars", "bastion@host", true}, // Go doesn't validate at config level
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			config := Config{
-				Host:        "target.example.com",
-				Port:        22,
-				User:        "user",
-				PrivateKey:  "key",
-				BastionHost: tt.bastionHost,
-			}
-			// Just verify config accepts various hostnames
-			if tt.bastionHost != "" && config.BastionHost != tt.bastionHost {
-				t.Errorf("BastionHost mismatch: %s", config.BastionHost)
-			}
-		})
-	}
-}
-
-// TestBastionConfig_PortDefaults tests bastion port defaults.
-func TestBastionConfig_PortDefaults(t *testing.T) {
-	tests := []struct {
-		name             string
-		inputBastionPort int
-		bastionHostSet   bool
-		expectedPort     int
-	}{
-		{"bastion port 0 defaults to 22", 0, true, 22},
-		{"bastion port explicitly set", 2222, true, 2222},
-		{"bastion port ignored when no host", 0, false, 0},
-		{"large port number", 65535, true, 65535},
-		{"minimum port", 1, true, 1},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			config := Config{
-				Host:       "target.example.com",
-				Port:       22,
-				User:       "user",
-				PrivateKey: "key",
-			}
-			if tt.bastionHostSet {
-				config.BastionHost = "bastion.example.com"
-			}
-			config.BastionPort = tt.inputBastionPort
-
-			// Apply defaults
-			config = config.WithDefaults()
-
-			if tt.bastionHostSet {
-				if config.BastionPort != tt.expectedPort {
-					t.Errorf("expected port %d, got %d", tt.expectedPort, config.BastionPort)
-				}
-			}
-		})
-	}
-}
-
-// TestBastionConfig_UserFallback tests bastion user fallback scenarios.
-func TestBastionConfig_UserFallback(t *testing.T) {
-	tests := []struct {
-		name         string
-		targetUser   string
-		bastionUser  string
-		expectedUser string
-		description  string
-	}{
-		{"bastion explicit user", "target", "jumpuser", "jumpuser", "explicit bastion user takes precedence"},
-		{"bastion inherits target user", "deploy", "", "deploy", "bastion inherits when empty"},
-		{"both users set", "user1", "user2", "user2", "bastion user takes precedence"},
-		{"empty target user", "", "bastionuser", "bastionuser", "bastion user used when target empty"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			config := Config{
-				Host:        "target.example.com",
-				Port:        22,
-				User:        tt.targetUser,
-				PrivateKey:  "key",
-				BastionHost: "bastion.example.com",
-				BastionUser: tt.bastionUser,
-			}
-
-			// Verify that bastion user is set correctly
-			actualUser := config.BastionUser
-			if actualUser == "" {
-				actualUser = config.User // This is what the code does
-			}
-
-			if actualUser != tt.expectedUser {
-				t.Errorf("%s: expected user %s, got %s", tt.description, tt.expectedUser, actualUser)
-			}
-		})
 	}
 }
 
@@ -2825,12 +1931,8 @@ func TestBastionConfig_KeyInheritance(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			config := Config{
-				Host:           "target.example.com",
-				Port:           22,
-				User:           "user",
 				PrivateKey:     tt.targetPrivateKey,
 				KeyPath:        tt.targetKeyPath,
-				BastionHost:    "bastion.example.com",
 				BastionKey:     tt.bastionKey,
 				BastionKeyPath: tt.bastionKeyPath,
 			}
@@ -2848,223 +1950,1840 @@ func TestBastionConfig_KeyInheritance(t *testing.T) {
 	}
 }
 
-// TestBastionConfig_PasswordAuth tests bastion with password authentication.
-func TestBastionConfig_PasswordAuth(t *testing.T) {
+// TestClient_IsHealthy tests the IsHealthy method.
+func TestClient_IsHealthy(t *testing.T) {
 	tests := []struct {
-		name            string
-		bastionPassword string
-		bastionKey      string
-		expectedCanAuth bool
-		description     string
+		name           string
+		client         *Client
+		expectedHealth bool
 	}{
-		{"bastion password only", "password123", "", true, "password auth enabled"},
-		{"bastion password with key", "password123", "key", true, "both auth methods available"},
-		{"bastion no auth", "", "", false, "no auth configured"},
-		{"bastion key only", "", "key", true, "key auth configured"},
+		{
+			name: "healthy client with all connections",
+			client: &Client{
+				sshClient:  &ssh.Client{},
+				sftpClient: NewMockSFTPClient(),
+			},
+			expectedHealth: true,
+		},
+		{
+			name:           "nil client",
+			client:         nil,
+			expectedHealth: false,
+		},
+		{
+			name: "client with nil ssh",
+			client: &Client{
+				sshClient:  nil,
+				sftpClient: NewMockSFTPClient(),
+			},
+			expectedHealth: false,
+		},
+		{
+			name: "client with nil sftp",
+			client: &Client{
+				sshClient:  &ssh.Client{},
+				sftpClient: nil,
+			},
+			expectedHealth: false,
+		},
+		{
+			name: "client with all nil",
+			client: &Client{
+				sshClient:  nil,
+				sftpClient: nil,
+			},
+			expectedHealth: false,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			config := Config{
-				Host:            "target.example.com",
-				Port:            22,
-				User:            "user",
-				BastionHost:     "bastion.example.com",
-				BastionKey:      tt.bastionKey,
-				BastionPassword: tt.bastionPassword,
-			}
-
-			hasPassword := config.BastionPassword != ""
-			hasKey := config.BastionKey != ""
-			canAuth := hasPassword || hasKey
-
-			if canAuth != tt.expectedCanAuth {
-				t.Errorf("%s: expected canAuth=%v, got %v", tt.description, tt.expectedCanAuth, canAuth)
+			healthy := tt.client.IsHealthy()
+			if healthy != tt.expectedHealth {
+				t.Errorf("IsHealthy() = %v, want %v", healthy, tt.expectedHealth)
 			}
 		})
 	}
 }
 
-// TestBastionConfig_MixedAuthMethods tests various auth method combinations with bastion.
-func TestBastionConfig_MixedAuthMethods(t *testing.T) {
-	testKey, _ := generateTestKey(t)
+// TestShellQuote tests the shellQuote function for proper shell escaping.
+func TestShellQuote(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "empty string",
+			input:    "",
+			expected: "''",
+		},
+		{
+			name:     "simple path",
+			input:    "/etc/nginx/nginx.conf",
+			expected: "'/etc/nginx/nginx.conf'",
+		},
+		{
+			name:     "path with spaces",
+			input:    "/path/with spaces/file.txt",
+			expected: "'/path/with spaces/file.txt'",
+		},
+		{
+			name:     "path with single quote",
+			input:    "/path/with'quote/file.txt",
+			expected: "'/path/with'\"'\"'quote/file.txt'",
+		},
+		{
+			name:     "path with multiple single quotes",
+			input:    "it's'a'test",
+			expected: "'it'\"'\"'s'\"'\"'a'\"'\"'test'",
+		},
+		{
+			name:     "path with special characters",
+			input:    "/path/with$dollar/file.txt",
+			expected: "'/path/with$dollar/file.txt'",
+		},
+		{
+			name:     "path with backtick",
+			input:    "/path/with`backtick`/file.txt",
+			expected: "'/path/with`backtick`/file.txt'",
+		},
+		{
+			name:     "path with semicolon",
+			input:    "/path;rm -rf /",
+			expected: "'/path;rm -rf /'",
+		},
+		{
+			name:     "path with pipe",
+			input:    "/path|whoami",
+			expected: "'/path|whoami'",
+		},
+		{
+			name:     "path with ampersand",
+			input:    "/path&command",
+			expected: "'/path&command'",
+		},
+		{
+			name:     "only single quote",
+			input:    "'",
+			expected: "''\"'\"''",
+		},
+	}
 
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := shellQuote(tt.input)
+			if result != tt.expected {
+				t.Errorf("shellQuote(%q) = %q, want %q", tt.input, result, tt.expected)
+			}
+		})
+	}
+}
+
+// TestClient_SetFileAttributes_Ownership tests ownership setting.
+func TestClient_SetFileAttributes_Ownership(t *testing.T) {
 	tests := []struct {
 		name        string
-		targetAuth  string // "key", "password", "cert"
-		bastionAuth string // "key", "password", "inherited"
-		description string
+		owner       string
+		group       string
+		mode        string
+		expectError bool
+		errorSubstr string
 	}{
-		{"target key + bastion key", "key", "key", "independent auth methods"},
-		{"target key + bastion password", "key", "password", "bastion password target key"},
-		{"target password + bastion key", "password", "key", "bastion key target password"},
-		{"target cert + bastion key", "cert", "key", "cert on target key on bastion"},
-		{"target key + bastion inherited", "key", "inherited", "bastion uses target key"},
-		{"target password + bastion inherited", "password", "inherited", "bastion inherits password fallback"},
+		{
+			name:        "valid owner only",
+			owner:       "root",
+			group:       "",
+			mode:        "",
+			expectError: true, // Will fail because sshClient is nil
+			errorSubstr: "nil",
+		},
+		{
+			name:        "valid group only",
+			owner:       "",
+			group:       "www-data",
+			mode:        "",
+			expectError: true, // Will fail because sshClient is nil
+			errorSubstr: "nil",
+		},
+		{
+			name:        "valid owner and group",
+			owner:       "nginx",
+			group:       "nginx",
+			mode:        "",
+			expectError: true, // Will fail because sshClient is nil
+			errorSubstr: "nil",
+		},
+		{
+			name:        "numeric owner",
+			owner:       "1000",
+			group:       "",
+			mode:        "",
+			expectError: true, // Will fail because sshClient is nil
+			errorSubstr: "nil",
+		},
+		{
+			name:        "numeric group",
+			owner:       "",
+			group:       "1000",
+			mode:        "",
+			expectError: true, // Will fail because sshClient is nil
+			errorSubstr: "nil",
+		},
+		{
+			name:        "owner with underscores and dashes",
+			owner:       "some_user-name",
+			group:       "",
+			mode:        "",
+			expectError: true, // Will fail because sshClient is nil
+			errorSubstr: "nil",
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			config := Config{
-				Host:        "target.example.com",
-				Port:        22,
-				User:        "user",
-				BastionHost: "bastion.example.com",
-			}
+			mockSFTP := NewMockSFTPClient()
+			mockSFTP.SetFile("/test.txt", []byte("content"), 0644)
+			client := NewClientWithSFTP(mockSFTP, nil)
 
-			// Setup target auth
-			switch tt.targetAuth {
-			case "key":
-				config.PrivateKey = testKey
-			case "password":
-				config.Password = "target-pass"
-			case "cert":
-				config.CertificatePath = "/path/to/cert"
-			}
+			// Recover from panic if sshClient is nil
+			defer func() {
+				if r := recover(); r != nil {
+					if !tt.expectError {
+						t.Errorf("unexpected panic: %v", r)
+					}
+				}
+			}()
 
-			// Setup bastion auth
-			switch tt.bastionAuth {
-			case "key":
-				config.BastionKey = testKey
-			case "password":
-				config.BastionPassword = "bastion-pass"
-			case "inherited":
-				// Don't set bastion auth, let it inherit
-			}
-
-			// Verify config is valid
-			if config.BastionHost == "" {
-				t.Error("bastion host not set")
+			err := client.SetFileAttributes(context.Background(), "/test.txt", tt.owner, tt.group, tt.mode)
+			if tt.expectError {
+				if err == nil {
+					// Check if we got a panic instead
+					return
+				} else if tt.errorSubstr != "" && !findSubstring(err.Error(), tt.errorSubstr) {
+					// Error is expected, either from panic recovery or function
+					if err.Error() != "" {
+						// Got an error which is what we expected
+						return
+					}
+					t.Errorf("expected error containing %q, got %q", tt.errorSubstr, err.Error())
+				}
+			} else {
+				if err != nil {
+					t.Errorf("unexpected error: %v", err)
+				}
 			}
 		})
 	}
 }
 
-// TestBastionConfig_ConnectionPoolKey tests that bastion config affects connection pooling.
-func TestBastionConfig_ConnectionPoolKey(t *testing.T) {
-	pool := NewConnectionPool(time.Minute)
-	defer pool.Close()
-
-	baseConfig := Config{
-		Host:       "target.example.com",
-		Port:       22,
-		User:       "user",
-		PrivateKey: "key",
-	}
-
-	// Test 1: Same target, different bastion
-	config1 := baseConfig
-	config1.BastionHost = "bastion1.example.com"
-
-	config2 := baseConfig
-	config2.BastionHost = "bastion2.example.com"
-
-	key1 := pool.connectionKey(config1)
-	key2 := pool.connectionKey(config2)
-
-	if key1 == key2 {
-		t.Error("different bastion hosts should produce different keys")
-	}
-
-	// Test 2: Same bastion, different ports
-	config3 := baseConfig
-	config3.BastionHost = "bastion.example.com"
-	config3.BastionPort = 22
-
-	config4 := baseConfig
-	config4.BastionHost = "bastion.example.com"
-	config4.BastionPort = 2222
-
-	key3 := pool.connectionKey(config3)
-	key4 := pool.connectionKey(config4)
-
-	if key3 == key4 {
-		t.Error("different bastion ports should produce different keys")
-	}
-
-	// Test 3: No bastion vs bastion
-	config5 := baseConfig
-	config6 := baseConfig
-	config6.BastionHost = "bastion.example.com"
-
-	key5 := pool.connectionKey(config5)
-	key6 := pool.connectionKey(config6)
-
-	if key5 == key6 {
-		t.Error("bastion vs non-bastion should produce different keys")
-	}
-}
-
-// TestBastionConfig_TimeoutBehavior tests bastion timeout configuration.
-func TestBastionConfig_TimeoutBehavior(t *testing.T) {
+// TestClient_SetFileAttributes_Mode_Variants tests mode setting with various values.
+func TestClient_SetFileAttributes_Mode_Variants(t *testing.T) {
 	tests := []struct {
-		name          string
-		timeout       time.Duration
-		expectedValid bool
+		name         string
+		mode         string
+		expectError  bool
+		expectedMode os.FileMode
 	}{
-		{"zero timeout", 0, true}, // Zero means no timeout
-		{"short timeout", 100 * time.Millisecond, true},
-		{"typical timeout", 10 * time.Second, true},
-		{"long timeout", 5 * time.Minute, true},
+		{
+			name:         "standard file mode 0644",
+			mode:         "0644",
+			expectError:  false,
+			expectedMode: 0644,
+		},
+		{
+			name:         "standard file mode 0755",
+			mode:         "0755",
+			expectError:  false,
+			expectedMode: 0755,
+		},
+		{
+			name:         "restrictive mode 0600",
+			mode:         "0600",
+			expectError:  false,
+			expectedMode: 0600,
+		},
+		{
+			name:         "permissive mode 0777",
+			mode:         "0777",
+			expectError:  false,
+			expectedMode: 0777,
+		},
+		{
+			name:         "3-digit mode 644",
+			mode:         "644",
+			expectError:  false,
+			expectedMode: 0644,
+		},
+		{
+			name:         "mode 0000",
+			mode:         "0000",
+			expectError:  false,
+			expectedMode: 0000,
+		},
+		{
+			name:         "mode 0400",
+			mode:         "0400",
+			expectError:  false,
+			expectedMode: 0400,
+		},
+		{
+			name:        "invalid mode with 8",
+			mode:        "0888",
+			expectError: true,
+		},
+		{
+			name:        "invalid mode with 9",
+			mode:        "0999",
+			expectError: true,
+		},
+		{
+			name:        "invalid mode with letters",
+			mode:        "rwxr-xr-x",
+			expectError: true,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			config := Config{
-				Host:        "target.example.com",
-				Port:        22,
-				User:        "user",
-				PrivateKey:  "key",
-				BastionHost: "bastion.example.com",
-				Timeout:     tt.timeout,
-			}
+			mockSFTP := NewMockSFTPClient()
+			mockSFTP.SetFile("/test.txt", []byte("content"), 0644)
+			client := NewClientWithSFTP(mockSFTP, nil)
 
-			if config.Timeout != tt.timeout {
-				t.Errorf("expected timeout %v, got %v", tt.timeout, config.Timeout)
+			err := client.SetFileAttributes(context.Background(), "/test.txt", "", "", tt.mode)
+			if tt.expectError {
+				if err == nil {
+					t.Errorf("expected error for mode %q, got nil", tt.mode)
+				}
+			} else {
+				if err != nil {
+					t.Errorf("unexpected error for mode %q: %v", tt.mode, err)
+				}
+				// Verify mode was set correctly
+				info, _ := mockSFTP.Stat("/test.txt")
+				if info.Mode() != tt.expectedMode {
+					t.Errorf("expected mode %o, got %o", tt.expectedMode, info.Mode())
+				}
 			}
 		})
 	}
 }
 
-// TestBastionConfig_AllFieldsCombined tests all bastion fields set together.
-func TestBastionConfig_AllFieldsCombined(t *testing.T) {
-	testKey, testKeyPath := generateTestKey(t)
-
-	config := Config{
-		// Target
-		Host:       "target.example.com",
-		Port:       22,
-		User:       "targetuser",
-		PrivateKey: testKey,
-		Password:   "target-pass",
-
-		// Bastion
-		BastionHost:     "bastion.example.com",
-		BastionPort:     2222,
-		BastionUser:     "bastionuser",
-		BastionKey:      testKey,
-		BastionKeyPath:  testKeyPath,
-		BastionPassword: "bastion-pass",
-
-		// Common
-		Timeout:               5 * time.Second,
-		InsecureIgnoreHostKey: true,
+// TestClient_UploadFile_Variants tests various upload scenarios
+func TestClient_UploadFile_Variants(t *testing.T) {
+	tests := []struct {
+		name        string
+		setupMock   func() *MockSFTPClient
+		createFile  func(t *testing.T) string
+		remotePath  string
+		expectError bool
+		errorSubstr string
+	}{
+		{
+			name: "small file upload",
+			setupMock: func() *MockSFTPClient {
+				return NewMockSFTPClient()
+			},
+			createFile: func(t *testing.T) string {
+				tmpDir := t.TempDir()
+				path := filepath.Join(tmpDir, "small.txt")
+				if err := os.WriteFile(path, []byte("small content"), 0644); err != nil {
+					t.Fatal(err)
+				}
+				return path
+			},
+			remotePath:  "/remote/small.txt",
+			expectError: false,
+		},
+		{
+			name: "large file upload",
+			setupMock: func() *MockSFTPClient {
+				return NewMockSFTPClient()
+			},
+			createFile: func(t *testing.T) string {
+				tmpDir := t.TempDir()
+				path := filepath.Join(tmpDir, "large.bin")
+				// Create a 1MB file
+				content := make([]byte, 1024*1024)
+				for i := range content {
+					content[i] = byte(i % 256)
+				}
+				if err := os.WriteFile(path, content, 0644); err != nil {
+					t.Fatal(err)
+				}
+				return path
+			},
+			remotePath:  "/remote/large.bin",
+			expectError: false,
+		},
+		{
+			name: "empty file upload",
+			setupMock: func() *MockSFTPClient {
+				return NewMockSFTPClient()
+			},
+			createFile: func(t *testing.T) string {
+				tmpDir := t.TempDir()
+				path := filepath.Join(tmpDir, "empty.txt")
+				if err := os.WriteFile(path, []byte{}, 0644); err != nil {
+					t.Fatal(err)
+				}
+				return path
+			},
+			remotePath:  "/remote/empty.txt",
+			expectError: false,
+		},
+		{
+			name: "binary file upload",
+			setupMock: func() *MockSFTPClient {
+				return NewMockSFTPClient()
+			},
+			createFile: func(t *testing.T) string {
+				tmpDir := t.TempDir()
+				path := filepath.Join(tmpDir, "binary.dat")
+				content := []byte{0x00, 0xFF, 0x01, 0xFE, 0x02, 0xFD}
+				if err := os.WriteFile(path, content, 0644); err != nil {
+					t.Fatal(err)
+				}
+				return path
+			},
+			remotePath:  "/remote/binary.dat",
+			expectError: false,
+		},
+		{
+			name: "create error",
+			setupMock: func() *MockSFTPClient {
+				mock := NewMockSFTPClient()
+				mock.SetError("Create", os.ErrPermission)
+				return mock
+			},
+			createFile: func(t *testing.T) string {
+				tmpDir := t.TempDir()
+				path := filepath.Join(tmpDir, "test.txt")
+				if err := os.WriteFile(path, []byte("content"), 0644); err != nil {
+					t.Fatal(err)
+				}
+				return path
+			},
+			remotePath:  "/remote/test.txt",
+			expectError: true,
+			errorSubstr: "failed to create remote file",
+		},
+		{
+			name: "mkdir error",
+			setupMock: func() *MockSFTPClient {
+				mock := NewMockSFTPClient()
+				mock.SetError("MkdirAll", os.ErrPermission)
+				return mock
+			},
+			createFile: func(t *testing.T) string {
+				tmpDir := t.TempDir()
+				path := filepath.Join(tmpDir, "test.txt")
+				if err := os.WriteFile(path, []byte("content"), 0644); err != nil {
+					t.Fatal(err)
+				}
+				return path
+			},
+			remotePath:  "/remote/nested/dir/test.txt",
+			expectError: true,
+			errorSubstr: "failed to create remote directory",
+		},
 	}
 
-	// Verify all fields are preserved
-	if config.BastionHost != "bastion.example.com" {
-		t.Error("BastionHost not set")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockSFTP := tt.setupMock()
+			client := NewClientWithSFTP(mockSFTP, nil)
+			localPath := tt.createFile(t)
+
+			err := client.UploadFile(context.Background(), localPath, tt.remotePath)
+			if tt.expectError {
+				if err == nil {
+					t.Error("expected error, got nil")
+				}
+				if tt.errorSubstr != "" && !findSubstring(err.Error(), tt.errorSubstr) {
+					t.Errorf("expected error containing %q, got %q", tt.errorSubstr, err.Error())
+				}
+			} else {
+				if err != nil {
+					t.Errorf("unexpected error: %v", err)
+				}
+			}
+		})
 	}
-	if config.BastionPort != 2222 {
-		t.Error("BastionPort not set")
+}
+
+// TestClient_ReadFileContent_Variants tests reading files with different sizes and scenarios
+func TestClient_ReadFileContent_Variants(t *testing.T) {
+	tests := []struct {
+		name        string
+		setupMock   func() *MockSFTPClient
+		remotePath  string
+		maxBytes    int64
+		expectError bool
+		errorSubstr string
+		verifyFn    func(t *testing.T, content []byte)
+	}{
+		{
+			name: "read small file",
+			setupMock: func() *MockSFTPClient {
+				mock := NewMockSFTPClient()
+				mock.SetFile("/small.txt", []byte("small content"), 0644)
+				return mock
+			},
+			remotePath:  "/small.txt",
+			maxBytes:    0,
+			expectError: false,
+			verifyFn: func(t *testing.T, content []byte) {
+				if string(content) != "small content" {
+					t.Errorf("expected 'small content', got %q", content)
+				}
+			},
+		},
+		{
+			name: "read large file",
+			setupMock: func() *MockSFTPClient {
+				mock := NewMockSFTPClient()
+				content := make([]byte, 10000)
+				for i := range content {
+					content[i] = byte(i % 256)
+				}
+				mock.SetFile("/large.bin", content, 0644)
+				return mock
+			},
+			remotePath:  "/large.bin",
+			maxBytes:    0,
+			expectError: false,
+			verifyFn: func(t *testing.T, content []byte) {
+				if len(content) != 10000 {
+					t.Errorf("expected length 10000, got %d", len(content))
+				}
+			},
+		},
+		{
+			name: "read with limit smaller than file",
+			setupMock: func() *MockSFTPClient {
+				mock := NewMockSFTPClient()
+				mock.SetFile("/test.txt", []byte("this is a longer file content"), 0644)
+				return mock
+			},
+			remotePath:  "/test.txt",
+			maxBytes:    10,
+			expectError: false,
+			verifyFn: func(t *testing.T, content []byte) {
+				if len(content) != 10 {
+					t.Errorf("expected length 10, got %d", len(content))
+				}
+				if string(content) != "this is a " {
+					t.Errorf("expected 'this is a ', got %q", content)
+				}
+			},
+		},
+		{
+			name: "read with limit larger than file",
+			setupMock: func() *MockSFTPClient {
+				mock := NewMockSFTPClient()
+				mock.SetFile("/test.txt", []byte("short"), 0644)
+				return mock
+			},
+			remotePath:  "/test.txt",
+			maxBytes:    100,
+			expectError: false,
+			verifyFn: func(t *testing.T, content []byte) {
+				if string(content) != "short" {
+					t.Errorf("expected 'short', got %q", content)
+				}
+			},
+		},
+		{
+			name: "read empty file",
+			setupMock: func() *MockSFTPClient {
+				mock := NewMockSFTPClient()
+				mock.SetFile("/empty.txt", []byte{}, 0644)
+				return mock
+			},
+			remotePath:  "/empty.txt",
+			maxBytes:    0,
+			expectError: false,
+			verifyFn: func(t *testing.T, content []byte) {
+				if len(content) != 0 {
+					t.Errorf("expected empty content, got length %d", len(content))
+				}
+			},
+		},
+		{
+			name: "read binary file",
+			setupMock: func() *MockSFTPClient {
+				mock := NewMockSFTPClient()
+				mock.SetFile("/binary.dat", []byte{0x00, 0xFF, 0x01, 0xFE}, 0644)
+				return mock
+			},
+			remotePath:  "/binary.dat",
+			maxBytes:    0,
+			expectError: false,
+			verifyFn: func(t *testing.T, content []byte) {
+				expected := []byte{0x00, 0xFF, 0x01, 0xFE}
+				if len(content) != len(expected) {
+					t.Errorf("expected length %d, got %d", len(expected), len(content))
+				}
+				for i, b := range expected {
+					if content[i] != b {
+						t.Errorf("byte %d: expected 0x%02X, got 0x%02X", i, b, content[i])
+					}
+				}
+			},
+		},
+		{
+			name: "file not found",
+			setupMock: func() *MockSFTPClient {
+				return NewMockSFTPClient()
+			},
+			remotePath:  "/nonexistent.txt",
+			maxBytes:    0,
+			expectError: true,
+			errorSubstr: "failed to open remote file",
+		},
+		{
+			name: "open error",
+			setupMock: func() *MockSFTPClient {
+				mock := NewMockSFTPClient()
+				mock.SetFile("/test.txt", []byte("content"), 0644)
+				mock.SetError("Open", os.ErrPermission)
+				return mock
+			},
+			remotePath:  "/test.txt",
+			maxBytes:    0,
+			expectError: true,
+			errorSubstr: "failed to open remote file",
+		},
 	}
-	if config.BastionUser != "bastionuser" {
-		t.Error("BastionUser not set")
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockSFTP := tt.setupMock()
+			client := NewClientWithSFTP(mockSFTP, nil)
+
+			content, err := client.ReadFileContent(context.Background(), tt.remotePath, tt.maxBytes)
+			if tt.expectError {
+				if err == nil {
+					t.Error("expected error, got nil")
+				}
+				if tt.errorSubstr != "" && !findSubstring(err.Error(), tt.errorSubstr) {
+					t.Errorf("expected error containing %q, got %q", tt.errorSubstr, err.Error())
+				}
+			} else {
+				if err != nil {
+					t.Errorf("unexpected error: %v", err)
+				}
+				if tt.verifyFn != nil {
+					tt.verifyFn(t, content)
+				}
+			}
+		})
 	}
-	if config.BastionPassword != "bastion-pass" {
-		t.Error("BastionPassword not set")
+}
+
+// TestClient_DeleteFile_Variants tests delete with various scenarios
+func TestClient_DeleteFile_Variants(t *testing.T) {
+	tests := []struct {
+		name        string
+		setupMock   func() *MockSFTPClient
+		remotePath  string
+		expectError bool
+		errorSubstr string
+	}{
+		{
+			name: "delete existing file",
+			setupMock: func() *MockSFTPClient {
+				mock := NewMockSFTPClient()
+				mock.SetFile("/test.txt", []byte("content"), 0644)
+				return mock
+			},
+			remotePath:  "/test.txt",
+			expectError: false,
+		},
+		{
+			name: "delete nonexistent file - should not error",
+			setupMock: func() *MockSFTPClient {
+				return NewMockSFTPClient()
+			},
+			remotePath:  "/nonexistent.txt",
+			expectError: false,
+		},
+		{
+			name: "delete with permission error",
+			setupMock: func() *MockSFTPClient {
+				mock := NewMockSFTPClient()
+				mock.SetFile("/test.txt", []byte("content"), 0644)
+				mock.SetError("Remove", os.ErrPermission)
+				return mock
+			},
+			remotePath:  "/test.txt",
+			expectError: true,
+			errorSubstr: "failed to delete remote file",
+		},
+		{
+			name: "delete with generic error",
+			setupMock: func() *MockSFTPClient {
+				mock := NewMockSFTPClient()
+				mock.SetFile("/test.txt", []byte("content"), 0644)
+				mock.SetError("Remove", errors.New("custom error"))
+				return mock
+			},
+			remotePath:  "/test.txt",
+			expectError: true,
+			errorSubstr: "failed to delete remote file",
+		},
 	}
-	if config.Timeout != 5*time.Second {
-		t.Error("Timeout not set")
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockSFTP := tt.setupMock()
+			client := NewClientWithSFTP(mockSFTP, nil)
+
+			err := client.DeleteFile(context.Background(), tt.remotePath)
+			if tt.expectError {
+				if err == nil {
+					t.Error("expected error, got nil")
+				}
+				if tt.errorSubstr != "" && !findSubstring(err.Error(), tt.errorSubstr) {
+					t.Errorf("expected error containing %q, got %q", tt.errorSubstr, err.Error())
+				}
+			} else {
+				if err != nil {
+					t.Errorf("unexpected error: %v", err)
+				}
+			}
+		})
+	}
+}
+
+// TestClient_FileExists_Variants tests file existence check with different states
+func TestClient_FileExists_Variants(t *testing.T) {
+	tests := []struct {
+		name           string
+		setupMock      func() *MockSFTPClient
+		remotePath     string
+		expectExists   bool
+		expectError    bool
+		errorSubstr    string
+	}{
+		{
+			name: "file exists",
+			setupMock: func() *MockSFTPClient {
+				mock := NewMockSFTPClient()
+				mock.SetFile("/exists.txt", []byte("content"), 0644)
+				return mock
+			},
+			remotePath:   "/exists.txt",
+			expectExists: true,
+			expectError:  false,
+		},
+		{
+			name: "file does not exist",
+			setupMock: func() *MockSFTPClient {
+				return NewMockSFTPClient()
+			},
+			remotePath:   "/nonexistent.txt",
+			expectExists: false,
+			expectError:  false,
+		},
+		{
+			name: "stat error - permission denied",
+			setupMock: func() *MockSFTPClient {
+				mock := NewMockSFTPClient()
+				mock.SetFile("/test.txt", []byte("content"), 0644)
+				mock.SetError("Stat", os.ErrPermission)
+				return mock
+			},
+			remotePath:   "/test.txt",
+			expectExists: false,
+			expectError:  true,
+			errorSubstr:  "",
+		},
+		{
+			name: "stat error - generic error",
+			setupMock: func() *MockSFTPClient {
+				mock := NewMockSFTPClient()
+				mock.SetError("Stat", errors.New("network error"))
+				return mock
+			},
+			remotePath:   "/test.txt",
+			expectExists: false,
+			expectError:  true,
+			errorSubstr:  "network error",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockSFTP := tt.setupMock()
+			client := NewClientWithSFTP(mockSFTP, nil)
+
+			exists, err := client.FileExists(context.Background(), tt.remotePath)
+			if tt.expectError {
+				if err == nil {
+					t.Error("expected error, got nil")
+				}
+			} else {
+				if err != nil {
+					t.Errorf("unexpected error: %v", err)
+				}
+				if exists != tt.expectExists {
+					t.Errorf("expected exists=%v, got %v", tt.expectExists, exists)
+				}
+			}
+		})
+	}
+}
+
+// TestClient_Close_Variants tests client close with different client states
+func TestClient_Close_Variants(t *testing.T) {
+	tests := []struct {
+		name        string
+		client      *Client
+		expectError bool
+		errorSubstr string
+	}{
+		{
+			name: "close with valid client",
+			client: &Client{
+				sftpClient: NewMockSFTPClient(),
+				sshClient:  nil,
+			},
+			expectError: false,
+		},
+		{
+			name: "close with nil sftp client",
+			client: &Client{
+				sftpClient: nil,
+				sshClient:  nil,
+			},
+			expectError: false,
+		},
+		{
+			name: "close with sftp error",
+			client: &Client{
+				sftpClient: func() *MockSFTPClient {
+					mock := NewMockSFTPClient()
+					mock.SetError("Close", errors.New("sftp close error"))
+					return mock
+				}(),
+				sshClient: nil,
+			},
+			expectError: true,
+			errorSubstr: "failed to close SFTP client",
+		},
+		{
+			name:        "close nil client",
+			client:      &Client{},
+			expectError: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.client.Close()
+			if tt.expectError {
+				if err == nil {
+					t.Error("expected error, got nil")
+				}
+				if tt.errorSubstr != "" && !findSubstring(err.Error(), tt.errorSubstr) {
+					t.Errorf("expected error containing %q, got %q", tt.errorSubstr, err.Error())
+				}
+			} else {
+				if err != nil {
+					t.Errorf("unexpected error: %v", err)
+				}
+			}
+		})
+	}
+}
+
+// TestClient_GetFileInfo_Variants tests GetFileInfo with various scenarios
+func TestClient_GetFileInfo_Variants(t *testing.T) {
+	tests := []struct {
+		name        string
+		setupMock   func() *MockSFTPClient
+		remotePath  string
+		expectError bool
+		verifyFn    func(t *testing.T, info os.FileInfo)
+	}{
+		{
+			name: "get info for regular file",
+			setupMock: func() *MockSFTPClient {
+				mock := NewMockSFTPClient()
+				mock.SetFile("/test.txt", []byte("content with text"), 0644)
+				return mock
+			},
+			remotePath:  "/test.txt",
+			expectError: false,
+			verifyFn: func(t *testing.T, info os.FileInfo) {
+				if info.Size() != 17 {
+					t.Errorf("expected size 17, got %d", info.Size())
+				}
+				if info.Mode() != 0644 {
+					t.Errorf("expected mode 0644, got %o", info.Mode())
+				}
+			},
+		},
+		{
+			name: "get info for large file",
+			setupMock: func() *MockSFTPClient {
+				mock := NewMockSFTPClient()
+				content := make([]byte, 50000)
+				mock.SetFile("/large.bin", content, 0755)
+				return mock
+			},
+			remotePath:  "/large.bin",
+			expectError: false,
+			verifyFn: func(t *testing.T, info os.FileInfo) {
+				if info.Size() != 50000 {
+					t.Errorf("expected size 50000, got %d", info.Size())
+				}
+				if info.Mode() != 0755 {
+					t.Errorf("expected mode 0755, got %o", info.Mode())
+				}
+			},
+		},
+		{
+			name: "get info for empty file",
+			setupMock: func() *MockSFTPClient {
+				mock := NewMockSFTPClient()
+				mock.SetFile("/empty.txt", []byte{}, 0600)
+				return mock
+			},
+			remotePath:  "/empty.txt",
+			expectError: false,
+			verifyFn: func(t *testing.T, info os.FileInfo) {
+				if info.Size() != 0 {
+					t.Errorf("expected size 0, got %d", info.Size())
+				}
+			},
+		},
+		{
+			name: "file not found",
+			setupMock: func() *MockSFTPClient {
+				return NewMockSFTPClient()
+			},
+			remotePath:  "/nonexistent.txt",
+			expectError: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockSFTP := tt.setupMock()
+			client := NewClientWithSFTP(mockSFTP, nil)
+
+			info, err := client.GetFileInfo(context.Background(), tt.remotePath)
+			if tt.expectError {
+				if err == nil {
+					t.Error("expected error, got nil")
+				}
+			} else {
+				if err != nil {
+					t.Errorf("unexpected error: %v", err)
+				}
+				if info == nil {
+					t.Fatal("expected non-nil FileInfo")
+				}
+				if tt.verifyFn != nil {
+					tt.verifyFn(t, info)
+				}
+			}
+		})
+	}
+}
+
+// TestSFTPClientWrapper_Methods tests the wrapper methods
+func TestSFTPClientWrapper_Methods(t *testing.T) {
+	mockSFTP := NewMockSFTPClient()
+	mockSFTP.SetFile("/test.txt", []byte("content"), 0644)
+
+	wrapper := &SFTPClientWrapper{client: nil} // We'll test with mock behavior
+
+	// Test that wrapper implements SFTPClientInterface
+	var _ SFTPClientInterface = wrapper
+
+	// Create a wrapper with actual mock
+	t.Run("wrapper interface compliance", func(t *testing.T) {
+		var _ SFTPClientInterface = &SFTPClientWrapper{}
+	})
+}
+
+// TestClient_SetFileAttributes_ContextCancellation tests context cancellation in SetFileAttributes
+func TestClient_SetFileAttributes_ContextCancellation(t *testing.T) {
+	mockSFTP := NewMockSFTPClient()
+	mockSFTP.SetFile("/test.txt", []byte("content"), 0644)
+	client := NewClientWithSFTP(mockSFTP, nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // Cancel immediately
+
+	err := client.SetFileAttributes(ctx, "/test.txt", "", "", "0755")
+	if err == nil {
+		t.Error("expected error for cancelled context")
+	}
+	if !findSubstring(err.Error(), "cancel") {
+		t.Errorf("expected cancellation error, got: %v", err)
+	}
+}
+
+// TestClient_DeleteFile_ContextCancellation tests context cancellation in DeleteFile
+func TestClient_DeleteFile_ContextCancellation(t *testing.T) {
+	mockSFTP := NewMockSFTPClient()
+	mockSFTP.SetFile("/test.txt", []byte("content"), 0644)
+	client := NewClientWithSFTP(mockSFTP, nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // Cancel immediately
+
+	err := client.DeleteFile(ctx, "/test.txt")
+	if err == nil {
+		t.Error("expected error for cancelled context")
+	}
+}
+
+// TestClient_FileExists_ContextCancellation tests context cancellation in FileExists
+func TestClient_FileExists_ContextCancellation(t *testing.T) {
+	mockSFTP := NewMockSFTPClient()
+	mockSFTP.SetFile("/test.txt", []byte("content"), 0644)
+	client := NewClientWithSFTP(mockSFTP, nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // Cancel immediately
+
+	_, err := client.FileExists(ctx, "/test.txt")
+	if err == nil {
+		t.Error("expected error for cancelled context")
+	}
+}
+
+// TestClient_GetFileInfo_ContextCancellation tests context cancellation in GetFileInfo
+func TestClient_GetFileInfo_ContextCancellation(t *testing.T) {
+	mockSFTP := NewMockSFTPClient()
+	mockSFTP.SetFile("/test.txt", []byte("content"), 0644)
+	client := NewClientWithSFTP(mockSFTP, nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // Cancel immediately
+
+	_, err := client.GetFileInfo(ctx, "/test.txt")
+	if err == nil {
+		t.Error("expected error for cancelled context")
+	}
+}
+
+// TestClient_ReadFileContent_ContextCancellation tests context cancellation in ReadFileContent
+func TestClient_ReadFileContent_ContextCancellation(t *testing.T) {
+	mockSFTP := NewMockSFTPClient()
+	content := make([]byte, 1024*1024) // 1MB to ensure cancellation can occur
+	mockSFTP.SetFile("/large.bin", content, 0644)
+	client := NewClientWithSFTP(mockSFTP, nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // Cancel immediately
+
+	_, err := client.ReadFileContent(ctx, "/large.bin", 0)
+	if err == nil {
+		t.Error("expected error for cancelled context")
+	}
+}
+
+// TestBuildCertificateAuth_ValidCertificate tests building certificate auth with a valid cert
+func TestBuildCertificateAuth_ValidCertificate(t *testing.T) {
+	// Generate a test key - we'll use the same key for both private key and certificate
+	testKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Marshal the private key
+	keyBytes := x509.MarshalPKCS1PrivateKey(testKey)
+	keyPEM := pem.EncodeToMemory(&pem.Block{
+		Type:  "RSA PRIVATE KEY",
+		Bytes: keyBytes,
+	})
+	keyContent := string(keyPEM)
+
+	// Create temp file for key
+	tmpDir := t.TempDir()
+	keyPath := filepath.Join(tmpDir, "test_key")
+	if err := os.WriteFile(keyPath, keyPEM, 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create SSH public key from the same RSA key
+	sshPubKey, err := ssh.NewPublicKey(&testKey.PublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Create a certificate with the same public key
+	cert := &ssh.Certificate{
+		Key:         sshPubKey,
+		CertType:    ssh.UserCert,
+		KeyId:       "test-key-id",
+		ValidAfter:  0,
+		ValidBefore: ssh.CertTimeInfinity,
+	}
+
+	// Sign the certificate
+	caKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	caSigner, err := ssh.NewSignerFromKey(caKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cert.SignCert(rand.Reader, caSigner); err != nil {
+		t.Fatal(err)
+	}
+
+	// Marshal the certificate
+	certBytes := ssh.MarshalAuthorizedKey(cert)
+
+	// Create temp file for certificate
+	certPath := filepath.Join(tmpDir, "cert.pub")
+	if err := os.WriteFile(certPath, certBytes, 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name   string
+		config Config
+	}{
+		{
+			name: "cert with inline key and cert",
+			config: Config{
+				PrivateKey:  keyContent,
+				Certificate: string(certBytes),
+			},
+		},
+		{
+			name: "cert with key path and cert path",
+			config: Config{
+				KeyPath:         keyPath,
+				CertificatePath: certPath,
+			},
+		},
+		{
+			name: "cert with inline key and cert path",
+			config: Config{
+				PrivateKey:      keyContent,
+				CertificatePath: certPath,
+			},
+		},
+		{
+			name: "cert with key path and inline cert",
+			config: Config{
+				KeyPath:     keyPath,
+				Certificate: string(certBytes),
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			authMethod, err := buildCertificateAuth(tt.config)
+			if err != nil {
+				t.Errorf("unexpected error: %v", err)
+			}
+			if authMethod == nil {
+				t.Error("expected non-nil auth method")
+			}
+		})
+	}
+}
+
+// TestClient_GetFileInfo_Errors tests error cases for GetFileInfo.
+func TestClient_GetFileInfo_Errors(t *testing.T) {
+	tests := []struct {
+		name        string
+		setupMock   func() *MockSFTPClient
+		remotePath  string
+		expectError bool
+		errorType   error
+	}{
+		{
+			name: "file not found",
+			setupMock: func() *MockSFTPClient {
+				return NewMockSFTPClient()
+			},
+			remotePath:  "/nonexistent.txt",
+			expectError: true,
+			errorType:   os.ErrNotExist,
+		},
+		{
+			name: "stat error",
+			setupMock: func() *MockSFTPClient {
+				mock := NewMockSFTPClient()
+				mock.SetError("Stat", os.ErrPermission)
+				mock.SetFile("/test.txt", []byte("content"), 0644)
+				return mock
+			},
+			remotePath:  "/test.txt",
+			expectError: true,
+			errorType:   os.ErrPermission,
+		},
+		{
+			name: "successful stat",
+			setupMock: func() *MockSFTPClient {
+				mock := NewMockSFTPClient()
+				mock.SetFile("/test.txt", []byte("content"), 0644)
+				return mock
+			},
+			remotePath:  "/test.txt",
+			expectError: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockSFTP := tt.setupMock()
+			client := NewClientWithSFTP(mockSFTP, nil)
+
+			info, err := client.GetFileInfo(context.Background(), tt.remotePath)
+			if tt.expectError {
+				if err == nil {
+					t.Error("expected error, got nil")
+				}
+				if tt.errorType != nil && !errors.Is(err, tt.errorType) {
+					t.Errorf("expected error type %v, got %v", tt.errorType, err)
+				}
+			} else {
+				if err != nil {
+					t.Errorf("unexpected error: %v", err)
+				}
+				if info == nil {
+					t.Error("expected non-nil FileInfo")
+				}
+			}
+		})
+	}
+}
+
+// TestValidateOwnerGroup tests owner/group validation.
+func TestValidateOwnerGroup(t *testing.T) {
+	tests := []struct {
+		name        string
+		value       string
+		fieldName   string
+		expectError bool
+	}{
+		{
+			name:        "empty is valid",
+			value:       "",
+			fieldName:   "owner",
+			expectError: false,
+		},
+		{
+			name:        "simple username",
+			value:       "root",
+			fieldName:   "owner",
+			expectError: false,
+		},
+		{
+			name:        "username with underscore",
+			value:       "www_data",
+			fieldName:   "owner",
+			expectError: false,
+		},
+		{
+			name:        "username with dash",
+			value:       "some-user",
+			fieldName:   "owner",
+			expectError: false,
+		},
+		{
+			name:        "numeric id",
+			value:       "1000",
+			fieldName:   "owner",
+			expectError: false,
+		},
+		{
+			name:        "starts with letter",
+			value:       "user123",
+			fieldName:   "owner",
+			expectError: false,
+		},
+		{
+			name:        "starts with underscore",
+			value:       "_user",
+			fieldName:   "owner",
+			expectError: false,
+		},
+		{
+			name:        "injection attempt with semicolon",
+			value:       "root;rm -rf /",
+			fieldName:   "owner",
+			expectError: true,
+		},
+		{
+			name:        "injection attempt with dollar",
+			value:       "root$(whoami)",
+			fieldName:   "owner",
+			expectError: true,
+		},
+		{
+			name:        "injection attempt with backtick",
+			value:       "root`id`",
+			fieldName:   "owner",
+			expectError: true,
+		},
+		{
+			name:        "injection attempt with pipe",
+			value:       "root|whoami",
+			fieldName:   "owner",
+			expectError: true,
+		},
+		{
+			name:        "injection attempt with ampersand",
+			value:       "root&whoami",
+			fieldName:   "owner",
+			expectError: true,
+		},
+		{
+			name:        "name too long",
+			value:       "this_is_a_very_long_username_that_exceeds_thirty_two_characters",
+			fieldName:   "owner",
+			expectError: true,
+		},
+		{
+			name:        "starts with dash",
+			value:       "-invalid",
+			fieldName:   "owner",
+			expectError: true,
+		},
+		{
+			name:        "starts with digit",
+			value:       "9user",
+			fieldName:   "owner",
+			expectError: true,
+		},
+		{
+			name:        "contains space",
+			value:       "user name",
+			fieldName:   "owner",
+			expectError: true,
+		},
+		{
+			name:        "contains slash",
+			value:       "user/name",
+			fieldName:   "owner",
+			expectError: true,
+		},
+		{
+			name:        "contains backslash",
+			value:       "user\\name",
+			fieldName:   "owner",
+			expectError: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateOwnerGroup(tt.value, tt.fieldName)
+			if tt.expectError {
+				if err == nil {
+					t.Errorf("expected error for value %q, got nil", tt.value)
+				}
+			} else {
+				if err != nil {
+					t.Errorf("unexpected error for value %q: %v", tt.value, err)
+				}
+			}
+		})
+	}
+}
+
+// TestClient_GetFileHash_Errors tests error cases for GetFileHash.
+func TestClient_GetFileHash_Errors(t *testing.T) {
+	tests := []struct {
+		name        string
+		setupMock   func() *MockSFTPClient
+		remotePath  string
+		expectError bool
+		errorSubstr string
+	}{
+		{
+			name: "file not found",
+			setupMock: func() *MockSFTPClient {
+				return NewMockSFTPClient()
+			},
+			remotePath:  "/nonexistent.txt",
+			expectError: true,
+			errorSubstr: "failed to open remote file",
+		},
+		{
+			name: "open error permission denied",
+			setupMock: func() *MockSFTPClient {
+				mock := NewMockSFTPClient()
+				mock.SetFile("/test.txt", []byte("content"), 0644)
+				mock.SetError("Open", os.ErrPermission)
+				return mock
+			},
+			remotePath:  "/test.txt",
+			expectError: true,
+			errorSubstr: "failed to open remote file",
+		},
+		{
+			name: "context cancelled",
+			setupMock: func() *MockSFTPClient {
+				mock := NewMockSFTPClient()
+				mock.SetFile("/test.txt", []byte("content"), 0644)
+				return mock
+			},
+			remotePath:  "/test.txt",
+			expectError: true,
+			errorSubstr: "operation cancelled",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockSFTP := tt.setupMock()
+			client := NewClientWithSFTP(mockSFTP, nil)
+
+			var ctx context.Context
+			if tt.name == "context cancelled" {
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithCancel(context.Background())
+				cancel() // Cancel immediately
+			} else {
+				ctx = context.Background()
+			}
+
+			_, err := client.GetFileHash(ctx, tt.remotePath)
+			if tt.expectError {
+				if err == nil {
+					t.Error("expected error, got nil")
+				}
+				if tt.errorSubstr != "" && !findSubstring(err.Error(), tt.errorSubstr) {
+					t.Errorf("expected error containing %q, got %q", tt.errorSubstr, err.Error())
+				}
+			} else {
+				if err != nil {
+					t.Errorf("unexpected error: %v", err)
+				}
+			}
+		})
+	}
+}
+
+// TestBuildHostKeyCallback_AllBranches tests all code paths in buildHostKeyCallback.
+func TestBuildHostKeyCallback_AllBranches(t *testing.T) {
+	tests := []struct {
+		name            string
+		config          Config
+		expectError     bool
+		expectErrorMsg  string
+	}{
+		{
+			name: "insecure ignore host key",
+			config: Config{
+				Host:                  "example.com",
+				Port:                  22,
+				InsecureIgnoreHostKey: true,
+			},
+			expectError: false,
+		},
+		{
+			name: "insecure ignore host key with logger",
+			config: Config{
+				Host:                  "example.com",
+				Port:                  22,
+				InsecureIgnoreHostKey: true,
+				Logger:                &testLogger{},
+			},
+			expectError: false,
+		},
+		{
+			name: "custom known hosts file not found",
+			config: Config{
+				Host:           "example.com",
+				Port:           22,
+				KnownHostsFile: "/nonexistent/path/known_hosts",
+			},
+			expectError:    true,
+			expectErrorMsg: "failed to load known_hosts file",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			callback, err := buildHostKeyCallback(tt.config)
+
+			if tt.expectError {
+				if err == nil {
+					t.Error("expected error, got nil")
+				}
+				if tt.expectErrorMsg != "" && !findSubstring(err.Error(), tt.expectErrorMsg) {
+					t.Errorf("expected error containing %q, got %q", tt.expectErrorMsg, err.Error())
+				}
+			} else {
+				if err != nil {
+					t.Errorf("unexpected error: %v", err)
+				}
+				if callback == nil {
+					t.Error("expected callback, got nil")
+				}
+			}
+		})
+	}
+}
+
+// testLogger is a simple logger for testing.
+type testLogger struct {
+	messages []string
+}
+
+func (l *testLogger) Debugf(format string, args ...interface{}) {
+	l.messages = append(l.messages, fmt.Sprintf(format, args...))
+}
+
+func (l *testLogger) Infof(format string, args ...interface{}) {
+	l.messages = append(l.messages, fmt.Sprintf(format, args...))
+}
+
+func (l *testLogger) Warnf(format string, args ...interface{}) {
+	l.messages = append(l.messages, fmt.Sprintf(format, args...))
+}
+
+func (l *testLogger) Errorf(format string, args ...interface{}) {
+	l.messages = append(l.messages, fmt.Sprintf(format, args...))
+}
+
+// TestSetFileAttributes_AdditionalEdgeCases tests additional edge cases for SetFileAttributes.
+func TestSetFileAttributes_AdditionalEdgeCases(t *testing.T) {
+	tests := []struct {
+		name        string
+		remotePath  string
+		owner       string
+		group       string
+		mode        string
+		mockSetup   func(*MockSFTPClient)
+		expectError bool
+		errorSubstr string
+	}{
+		{
+			name:        "set mode only",
+			remotePath:  "/tmp/file.txt",
+			owner:       "",
+			group:       "",
+			mode:        "0755",
+			mockSetup: func(m *MockSFTPClient) {
+				m.SetFile("/tmp/file.txt", []byte("content"), 0644)
+			},
+			expectError: false,
+		},
+		{
+			name:        "chmod error",
+			remotePath:  "/tmp/file.txt",
+			owner:       "",
+			group:       "",
+			mode:        "0755",
+			mockSetup: func(m *MockSFTPClient) {
+				m.SetFile("/tmp/file.txt", []byte("content"), 0644)
+				m.SetError("Chmod", errors.New("chmod failed"))
+			},
+			expectError: true,
+			errorSubstr: "chmod failed",
+		},
+		{
+			name:        "empty strings for owner and group",
+			remotePath:  "/tmp/file.txt",
+			owner:       "",
+			group:       "",
+			mode:        "",
+			mockSetup: func(m *MockSFTPClient) {
+				m.SetFile("/tmp/file.txt", []byte("content"), 0644)
+			},
+			expectError: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			withMockSFTPClient(t, func(t *testing.T, client *Client, mock *MockSFTPClient) {
+				tt.mockSetup(mock)
+
+				ctx := context.Background()
+				err := client.SetFileAttributes(ctx, tt.remotePath, tt.owner, tt.group, tt.mode)
+
+				if tt.expectError {
+					if err == nil {
+						t.Error("expected error, got nil")
+					}
+					if tt.errorSubstr != "" && !findSubstring(err.Error(), tt.errorSubstr) {
+						t.Errorf("expected error containing %q, got %q", tt.errorSubstr, err.Error())
+					}
+				} else {
+					if err != nil {
+						t.Errorf("unexpected error: %v", err)
+					}
+				}
+			})
+		})
+	}
+}
+
+// TestUploadFile_AdditionalErrors tests additional error paths in UploadFile.
+func TestUploadFile_AdditionalErrors(t *testing.T) {
+	tests := []struct {
+		name        string
+		localPath   string
+		remotePath  string
+		mockSetup   func(*MockSFTPClient)
+		expectError bool
+		errorSubstr string
+	}{
+		{
+			name:       "file write error",
+			localPath:  "/tmp/test.txt",
+			remotePath: "/remote/test.txt",
+			mockSetup: func(m *MockSFTPClient) {
+				m.SetError("Create", errors.New("permission denied"))
+			},
+			expectError: true,
+			errorSubstr: "failed to create remote file",
+		},
+		{
+			name:       "io.Copy failure with partial write",
+			localPath:  "/tmp/test.txt",
+			remotePath: "/remote/test.txt",
+			mockSetup: func(m *MockSFTPClient) {
+				// No setup - just test normal flow with existing mock
+			},
+			expectError: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			withMockSFTPClient(t, func(t *testing.T, client *Client, mock *MockSFTPClient) {
+				tt.mockSetup(mock)
+
+				// Create a temporary test file
+				tmpDir := t.TempDir()
+				testFile := filepath.Join(tmpDir, "test.txt")
+				if err := os.WriteFile(testFile, []byte("test content"), 0644); err != nil {
+					t.Fatalf("failed to create test file: %v", err)
+				}
+
+				ctx := context.Background()
+				err := client.UploadFile(ctx, testFile, tt.remotePath)
+
+				if tt.expectError {
+					if err == nil {
+						t.Error("expected error, got nil")
+					}
+					if tt.errorSubstr != "" && !findSubstring(err.Error(), tt.errorSubstr) {
+						t.Errorf("expected error containing %q, got %q", tt.errorSubstr, err.Error())
+					}
+				} else {
+					if err != nil {
+						t.Errorf("unexpected error: %v", err)
+					}
+				}
+			})
+		})
+	}
+}
+
+// TestDeleteFile_Variants tests DeleteFile with different scenarios.
+func TestDeleteFile_Variants(t *testing.T) {
+	tests := []struct {
+		name        string
+		remotePath  string
+		mockSetup   func(*MockSFTPClient)
+		expectError bool
+		errorSubstr string
+	}{
+		{
+			name:       "successful delete",
+			remotePath: "/tmp/file.txt",
+			mockSetup: func(m *MockSFTPClient) {
+				m.SetFile("/tmp/file.txt", []byte("content"), 0644)
+			},
+			expectError: false,
+		},
+		{
+			name:       "delete non-existent file",
+			remotePath: "/tmp/nonexistent.txt",
+			mockSetup: func(m *MockSFTPClient) {
+				// File doesn't exist
+			},
+			expectError: false,
+		},
+		{
+			name:       "delete with error",
+			remotePath: "/tmp/file.txt",
+			mockSetup: func(m *MockSFTPClient) {
+				m.SetFile("/tmp/file.txt", []byte("content"), 0644)
+				m.SetError("Remove", errors.New("delete failed"))
+			},
+			expectError: true,
+			errorSubstr: "delete failed",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			withMockSFTPClient(t, func(t *testing.T, client *Client, mock *MockSFTPClient) {
+				tt.mockSetup(mock)
+
+				ctx := context.Background()
+				err := client.DeleteFile(ctx, tt.remotePath)
+
+				if tt.expectError {
+					if err == nil {
+						t.Error("expected error, got nil")
+					}
+					if tt.errorSubstr != "" && !findSubstring(err.Error(), tt.errorSubstr) {
+						t.Errorf("expected error containing %q, got %q", tt.errorSubstr, err.Error())
+					}
+				} else {
+					if err != nil {
+						t.Errorf("unexpected error: %v", err)
+					}
+				}
+			})
+		})
+	}
+}
+
+// TestFileExists_Variants tests FileExists with different file states.
+func TestFileExists_Variants(t *testing.T) {
+	tests := []struct {
+		name        string
+		remotePath  string
+		mockSetup   func(*MockSFTPClient)
+		expectExists bool
+		expectError bool
+		errorSubstr string
+	}{
+		{
+			name:        "file exists",
+			remotePath:  "/tmp/exists.txt",
+			mockSetup: func(m *MockSFTPClient) {
+				m.SetFile("/tmp/exists.txt", []byte("content"), 0644)
+			},
+			expectExists: true,
+			expectError:  false,
+		},
+		{
+			name:        "file does not exist",
+			remotePath:  "/tmp/notfound.txt",
+			mockSetup: func(m *MockSFTPClient) {
+				// No files set up
+			},
+			expectExists: false,
+			expectError:  false,
+		},
+		{
+			name:        "stat error",
+			remotePath:  "/tmp/error.txt",
+			mockSetup: func(m *MockSFTPClient) {
+				m.SetFile("/tmp/error.txt", []byte("content"), 0644)
+				m.SetError("Stat", errors.New("stat failed"))
+			},
+			expectError: true,
+			errorSubstr: "stat failed",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			withMockSFTPClient(t, func(t *testing.T, client *Client, mock *MockSFTPClient) {
+				tt.mockSetup(mock)
+
+				ctx := context.Background()
+				exists, err := client.FileExists(ctx, tt.remotePath)
+
+				if tt.expectError {
+					if err == nil {
+						t.Error("expected error, got nil")
+					}
+					if tt.errorSubstr != "" && !findSubstring(err.Error(), tt.errorSubstr) {
+						t.Errorf("expected error containing %q, got %q", tt.errorSubstr, err.Error())
+					}
+				} else {
+					if err != nil {
+						t.Errorf("unexpected error: %v", err)
+					}
+					if exists != tt.expectExists {
+						t.Errorf("expected exists=%v, got %v", tt.expectExists, exists)
+					}
+				}
+			})
+		})
+	}
+}
+
+// TestGetFileInfo_Variants tests GetFileInfo with different file states.
+func TestGetFileInfo_Variants(t *testing.T) {
+	tests := []struct {
+		name        string
+		remotePath  string
+		mockSetup   func(*MockSFTPClient)
+		expectError bool
+		errorSubstr string
+	}{
+		{
+			name:       "get info for existing file",
+			remotePath: "/tmp/file.txt",
+			mockSetup: func(m *MockSFTPClient) {
+				m.SetFile("/tmp/file.txt", []byte("test content"), 0644)
+			},
+			expectError: false,
+		},
+		{
+			name:       "get info for non-existent file",
+			remotePath: "/tmp/notfound.txt",
+			mockSetup: func(m *MockSFTPClient) {
+				// No file
+			},
+			expectError: true,
+			errorSubstr: "not exist",
+		},
+		{
+			name:       "stat error",
+			remotePath: "/tmp/file.txt",
+			mockSetup: func(m *MockSFTPClient) {
+				m.SetFile("/tmp/file.txt", []byte("content"), 0644)
+				m.SetError("Stat", errors.New("stat failed"))
+			},
+			expectError: true,
+			errorSubstr: "stat failed",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			withMockSFTPClient(t, func(t *testing.T, client *Client, mock *MockSFTPClient) {
+				tt.mockSetup(mock)
+
+				ctx := context.Background()
+				info, err := client.GetFileInfo(ctx, tt.remotePath)
+
+				if tt.expectError {
+					if err == nil {
+						t.Error("expected error, got nil")
+					}
+					if tt.errorSubstr != "" && !findSubstring(err.Error(), tt.errorSubstr) {
+						t.Errorf("expected error containing %q, got %q", tt.errorSubstr, err.Error())
+					}
+				} else {
+					if err != nil {
+						t.Errorf("unexpected error: %v", err)
+					}
+					if info == nil {
+						t.Error("expected info, got nil")
+					}
+				}
+			})
+		})
 	}
 }

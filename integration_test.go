@@ -185,23 +185,32 @@ func getTestConfig(t *testing.T) Config {
 	}
 }
 
-// Integration Tests
+// withIntegrationTestClient creates a test client and calls the provided function, ensuring cleanup.
+// This helper reduces boilerplate by automatically getting the config and managing client lifecycle.
+func withIntegrationTestClient(t *testing.T, fn func(t *testing.T, client *Client)) {
+	t.Helper()
 
-func TestIntegration_NewClient(t *testing.T) {
 	config := getTestConfig(t)
-
 	client, err := NewClient(config)
 	if err != nil {
 		t.Fatalf("NewClient() error = %v", err)
 	}
 	defer client.Close()
 
-	if client.sshClient == nil {
-		t.Error("expected non-nil sshClient")
-	}
-	if client.sftpClient == nil {
-		t.Error("expected non-nil sftpClient")
-	}
+	fn(t, client)
+}
+
+// Integration Tests
+
+func TestIntegration_NewClient(t *testing.T) {
+	withIntegrationTestClient(t, func(t *testing.T, client *Client) {
+		if client.sshClient == nil {
+			t.Error("expected non-nil sshClient")
+		}
+		if client.sftpClient == nil {
+			t.Error("expected non-nil sftpClient")
+		}
+	})
 }
 
 func TestIntegration_NewClient_WithKeyPath(t *testing.T) {
@@ -223,224 +232,188 @@ func TestIntegration_NewClient_WithKeyPath(t *testing.T) {
 }
 
 func TestIntegration_UploadFile(t *testing.T) {
-	config := getTestConfig(t)
+	withIntegrationTestClient(t, func(t *testing.T, client *Client) {
+		// Create a temp file to upload.
+		tmpDir := t.TempDir()
+		localPath := filepath.Join(tmpDir, "test.txt")
+		content := []byte("integration test content")
+		if err := os.WriteFile(localPath, content, 0644); err != nil {
+			t.Fatalf("failed to create temp file: %v", err)
+		}
 
-	client, err := NewClient(config)
-	if err != nil {
-		t.Fatalf("NewClient() error = %v", err)
-	}
-	defer client.Close()
+		remotePath := "/config/test_upload.txt"
 
-	// Create a temp file to upload.
-	tmpDir := t.TempDir()
-	localPath := filepath.Join(tmpDir, "test.txt")
-	content := []byte("integration test content")
-	if err := os.WriteFile(localPath, content, 0644); err != nil {
-		t.Fatalf("failed to create temp file: %v", err)
-	}
+		err := client.UploadFile(context.Background(), localPath, remotePath)
+		if err != nil {
+			t.Errorf("UploadFile() error = %v", err)
+		}
 
-	remotePath := "/config/test_upload.txt"
+		// Verify file exists.
+		exists, err := client.FileExists(context.Background(), remotePath)
+		if err != nil {
+			t.Errorf("FileExists() error = %v", err)
+		}
+		if !exists {
+			t.Error("expected file to exist after upload")
+		}
 
-	err = client.UploadFile(context.Background(), localPath, remotePath)
-	if err != nil {
-		t.Errorf("UploadFile() error = %v", err)
-	}
-
-	// Verify file exists.
-	exists, err := client.FileExists(context.Background(), remotePath)
-	if err != nil {
-		t.Errorf("FileExists() error = %v", err)
-	}
-	if !exists {
-		t.Error("expected file to exist after upload")
-	}
-
-	// Clean up.
-	_ = client.DeleteFile(context.Background(), remotePath)
+		// Clean up.
+		_ = client.DeleteFile(context.Background(), remotePath)
+	})
 }
 
 func TestIntegration_GetFileHash(t *testing.T) {
-	config := getTestConfig(t)
+	withIntegrationTestClient(t, func(t *testing.T, client *Client) {
+		// Create and upload a test file.
+		tmpDir := t.TempDir()
+		localPath := filepath.Join(tmpDir, "hash_test.txt")
+		content := []byte("content for hashing")
+		if err := os.WriteFile(localPath, content, 0644); err != nil {
+			t.Fatalf("failed to create temp file: %v", err)
+		}
 
-	client, err := NewClient(config)
-	if err != nil {
-		t.Fatalf("NewClient() error = %v", err)
-	}
-	defer client.Close()
+		remotePath := "/config/hash_test.txt"
+		if err := client.UploadFile(context.Background(), localPath, remotePath); err != nil {
+			t.Fatalf("UploadFile() error = %v", err)
+		}
+		defer client.DeleteFile(context.Background(), remotePath)
 
-	// Create and upload a test file.
-	tmpDir := t.TempDir()
-	localPath := filepath.Join(tmpDir, "hash_test.txt")
-	content := []byte("content for hashing")
-	if err := os.WriteFile(localPath, content, 0644); err != nil {
-		t.Fatalf("failed to create temp file: %v", err)
-	}
-
-	remotePath := "/config/hash_test.txt"
-	if err := client.UploadFile(context.Background(), localPath, remotePath); err != nil {
-		t.Fatalf("UploadFile() error = %v", err)
-	}
-	defer client.DeleteFile(context.Background(), remotePath)
-
-	// Get hash.
-	hash, err := client.GetFileHash(context.Background(), remotePath)
-	if err != nil {
-		t.Errorf("GetFileHash() error = %v", err)
-	}
-	if hash == "" {
-		t.Error("expected non-empty hash")
-	}
-	if len(hash) != 71 { // "sha256:" + 64 hex chars
-		t.Errorf("expected hash length 71, got %d", len(hash))
-	}
+		// Get hash.
+		hash, err := client.GetFileHash(context.Background(), remotePath)
+		if err != nil {
+			t.Errorf("GetFileHash() error = %v", err)
+		}
+		if hash == "" {
+			t.Error("expected non-empty hash")
+		}
+		if len(hash) != 71 { // "sha256:" + 64 hex chars
+			t.Errorf("expected hash length 71, got %d", len(hash))
+		}
+	})
 }
 
 func TestIntegration_ReadFileContent(t *testing.T) {
-	config := getTestConfig(t)
+	withIntegrationTestClient(t, func(t *testing.T, client *Client) {
+		// Create and upload a test file.
+		tmpDir := t.TempDir()
+		localPath := filepath.Join(tmpDir, "read_test.txt")
+		content := []byte("content to read back")
+		if err := os.WriteFile(localPath, content, 0644); err != nil {
+			t.Fatalf("failed to create temp file: %v", err)
+		}
 
-	client, err := NewClient(config)
-	if err != nil {
-		t.Fatalf("NewClient() error = %v", err)
-	}
-	defer client.Close()
+		remotePath := "/config/read_test.txt"
+		if err := client.UploadFile(context.Background(), localPath, remotePath); err != nil {
+			t.Fatalf("UploadFile() error = %v", err)
+		}
+		defer client.DeleteFile(context.Background(), remotePath)
 
-	// Create and upload a test file.
-	tmpDir := t.TempDir()
-	localPath := filepath.Join(tmpDir, "read_test.txt")
-	content := []byte("content to read back")
-	if err := os.WriteFile(localPath, content, 0644); err != nil {
-		t.Fatalf("failed to create temp file: %v", err)
-	}
-
-	remotePath := "/config/read_test.txt"
-	if err := client.UploadFile(context.Background(), localPath, remotePath); err != nil {
-		t.Fatalf("UploadFile() error = %v", err)
-	}
-	defer client.DeleteFile(context.Background(), remotePath)
-
-	// Read content back.
-	data, err := client.ReadFileContent(context.Background(), remotePath, 0)
-	if err != nil {
-		t.Errorf("ReadFileContent() error = %v", err)
-	}
-	if string(data) != string(content) {
-		t.Errorf("ReadFileContent() = %q, want %q", data, content)
-	}
+		// Read content back.
+		data, err := client.ReadFileContent(context.Background(), remotePath, 0)
+		if err != nil {
+			t.Errorf("ReadFileContent() error = %v", err)
+		}
+		if string(data) != string(content) {
+			t.Errorf("ReadFileContent() = %q, want %q", data, content)
+		}
+	})
 }
 
 func TestIntegration_GetFileInfo(t *testing.T) {
-	config := getTestConfig(t)
+	withIntegrationTestClient(t, func(t *testing.T, client *Client) {
+		// Create and upload a test file.
+		tmpDir := t.TempDir()
+		localPath := filepath.Join(tmpDir, "info_test.txt")
+		content := []byte("content for info")
+		if err := os.WriteFile(localPath, content, 0644); err != nil {
+			t.Fatalf("failed to create temp file: %v", err)
+		}
 
-	client, err := NewClient(config)
-	if err != nil {
-		t.Fatalf("NewClient() error = %v", err)
-	}
-	defer client.Close()
+		remotePath := "/config/info_test.txt"
+		if err := client.UploadFile(context.Background(), localPath, remotePath); err != nil {
+			t.Fatalf("UploadFile() error = %v", err)
+		}
+		defer client.DeleteFile(context.Background(), remotePath)
 
-	// Create and upload a test file.
-	tmpDir := t.TempDir()
-	localPath := filepath.Join(tmpDir, "info_test.txt")
-	content := []byte("content for info")
-	if err := os.WriteFile(localPath, content, 0644); err != nil {
-		t.Fatalf("failed to create temp file: %v", err)
-	}
-
-	remotePath := "/config/info_test.txt"
-	if err := client.UploadFile(context.Background(), localPath, remotePath); err != nil {
-		t.Fatalf("UploadFile() error = %v", err)
-	}
-	defer client.DeleteFile(context.Background(), remotePath)
-
-	// Get file info.
-	info, err := client.GetFileInfo(context.Background(), remotePath)
-	if err != nil {
-		t.Errorf("GetFileInfo() error = %v", err)
-	}
-	if info == nil {
-		t.Fatal("expected non-nil FileInfo")
-	}
-	if info.Size() != int64(len(content)) {
-		t.Errorf("Size() = %d, want %d", info.Size(), len(content))
-	}
+		// Get file info.
+		info, err := client.GetFileInfo(context.Background(), remotePath)
+		if err != nil {
+			t.Errorf("GetFileInfo() error = %v", err)
+		}
+		if info == nil {
+			t.Fatal("expected non-nil FileInfo")
+		}
+		if info.Size() != int64(len(content)) {
+			t.Errorf("Size() = %d, want %d", info.Size(), len(content))
+		}
+	})
 }
 
 func TestIntegration_DeleteFile(t *testing.T) {
-	config := getTestConfig(t)
+	withIntegrationTestClient(t, func(t *testing.T, client *Client) {
+		// Create and upload a test file.
+		tmpDir := t.TempDir()
+		localPath := filepath.Join(tmpDir, "delete_test.txt")
+		if err := os.WriteFile(localPath, []byte("to be deleted"), 0644); err != nil {
+			t.Fatalf("failed to create temp file: %v", err)
+		}
 
-	client, err := NewClient(config)
-	if err != nil {
-		t.Fatalf("NewClient() error = %v", err)
-	}
-	defer client.Close()
+		remotePath := "/config/delete_test.txt"
+		if err := client.UploadFile(context.Background(), localPath, remotePath); err != nil {
+			t.Fatalf("UploadFile() error = %v", err)
+		}
 
-	// Create and upload a test file.
-	tmpDir := t.TempDir()
-	localPath := filepath.Join(tmpDir, "delete_test.txt")
-	if err := os.WriteFile(localPath, []byte("to be deleted"), 0644); err != nil {
-		t.Fatalf("failed to create temp file: %v", err)
-	}
+		// Verify file exists.
+		exists, _ := client.FileExists(context.Background(), remotePath)
+		if !exists {
+			t.Fatal("expected file to exist before delete")
+		}
 
-	remotePath := "/config/delete_test.txt"
-	if err := client.UploadFile(context.Background(), localPath, remotePath); err != nil {
-		t.Fatalf("UploadFile() error = %v", err)
-	}
+		// Delete file.
+		err := client.DeleteFile(context.Background(), remotePath)
+		if err != nil {
+			t.Errorf("DeleteFile() error = %v", err)
+		}
 
-	// Verify file exists.
-	exists, _ := client.FileExists(context.Background(), remotePath)
-	if !exists {
-		t.Fatal("expected file to exist before delete")
-	}
-
-	// Delete file.
-	err = client.DeleteFile(context.Background(), remotePath)
-	if err != nil {
-		t.Errorf("DeleteFile() error = %v", err)
-	}
-
-	// Verify file is gone.
-	exists, _ = client.FileExists(context.Background(), remotePath)
-	if exists {
-		t.Error("expected file to not exist after delete")
-	}
+		// Verify file is gone.
+		exists, _ = client.FileExists(context.Background(), remotePath)
+		if exists {
+			t.Error("expected file to not exist after delete")
+		}
+	})
 }
 
 func TestIntegration_SetFileAttributes_Mode(t *testing.T) {
-	config := getTestConfig(t)
+	withIntegrationTestClient(t, func(t *testing.T, client *Client) {
+		// Create and upload a test file.
+		tmpDir := t.TempDir()
+		localPath := filepath.Join(tmpDir, "mode_test.txt")
+		if err := os.WriteFile(localPath, []byte("mode test"), 0644); err != nil {
+			t.Fatalf("failed to create temp file: %v", err)
+		}
 
-	client, err := NewClient(config)
-	if err != nil {
-		t.Fatalf("NewClient() error = %v", err)
-	}
-	defer client.Close()
+		remotePath := "/config/mode_test.txt"
+		if err := client.UploadFile(context.Background(), localPath, remotePath); err != nil {
+			t.Fatalf("UploadFile() error = %v", err)
+		}
+		defer client.DeleteFile(context.Background(), remotePath)
 
-	// Create and upload a test file.
-	tmpDir := t.TempDir()
-	localPath := filepath.Join(tmpDir, "mode_test.txt")
-	if err := os.WriteFile(localPath, []byte("mode test"), 0644); err != nil {
-		t.Fatalf("failed to create temp file: %v", err)
-	}
+		// Set mode only (no owner/group).
+		err := client.SetFileAttributes(context.Background(), remotePath, "", "", "0755")
+		if err != nil {
+			t.Errorf("SetFileAttributes() error = %v", err)
+		}
 
-	remotePath := "/config/mode_test.txt"
-	if err := client.UploadFile(context.Background(), localPath, remotePath); err != nil {
-		t.Fatalf("UploadFile() error = %v", err)
-	}
-	defer client.DeleteFile(context.Background(), remotePath)
-
-	// Set mode only (no owner/group).
-	err = client.SetFileAttributes(context.Background(), remotePath, "", "", "0755")
-	if err != nil {
-		t.Errorf("SetFileAttributes() error = %v", err)
-	}
-
-	// Verify mode was changed.
-	info, err := client.GetFileInfo(context.Background(), remotePath)
-	if err != nil {
-		t.Fatalf("GetFileInfo() error = %v", err)
-	}
-	// Note: Mode includes file type bits, so we mask it.
-	if info.Mode().Perm() != 0755 {
-		t.Errorf("Mode() = %o, want %o", info.Mode().Perm(), 0755)
-	}
+		// Verify mode was changed.
+		info, err := client.GetFileInfo(context.Background(), remotePath)
+		if err != nil {
+			t.Fatalf("GetFileInfo() error = %v", err)
+		}
+		// Note: Mode includes file type bits, so we mask it.
+		if info.Mode().Perm() != 0755 {
+			t.Errorf("Mode() = %o, want %o", info.Mode().Perm(), 0755)
+		}
+	})
 }
 
 func TestIntegration_ConnectionPool_GetOrCreate(t *testing.T) {
@@ -668,43 +641,37 @@ func TestIntegration_Client_Close(t *testing.T) {
 }
 
 func TestIntegration_SetFileAttributes_Ownership(t *testing.T) {
-	config := getTestConfig(t)
+	withIntegrationTestClient(t, func(t *testing.T, client *Client) {
+		// Create and upload a test file.
+		tmpDir := t.TempDir()
+		localPath := filepath.Join(tmpDir, "owner_test.txt")
+		if err := os.WriteFile(localPath, []byte("owner test"), 0644); err != nil {
+			t.Fatalf("failed to create temp file: %v", err)
+		}
 
-	client, err := NewClient(config)
-	if err != nil {
-		t.Fatalf("NewClient() error = %v", err)
-	}
-	defer client.Close()
+		remotePath := "/config/owner_test.txt"
+		if err := client.UploadFile(context.Background(), localPath, remotePath); err != nil {
+			t.Fatalf("UploadFile() error = %v", err)
+		}
+		defer client.DeleteFile(context.Background(), remotePath)
 
-	// Create and upload a test file.
-	tmpDir := t.TempDir()
-	localPath := filepath.Join(tmpDir, "owner_test.txt")
-	if err := os.WriteFile(localPath, []byte("owner test"), 0644); err != nil {
-		t.Fatalf("failed to create temp file: %v", err)
-	}
+		// Set owner only (may fail if user doesn't exist, but covers the code path).
+		err := client.SetFileAttributes(context.Background(), remotePath, "abc", "", "")
+		// Note: Error is expected since "abc" user likely doesn't exist.
+		t.Logf("SetFileAttributes(owner=abc) result: %v", err)
 
-	remotePath := "/config/owner_test.txt"
-	if err := client.UploadFile(context.Background(), localPath, remotePath); err != nil {
-		t.Fatalf("UploadFile() error = %v", err)
-	}
-	defer client.DeleteFile(context.Background(), remotePath)
+		// Set group only.
+		err = client.SetFileAttributes(context.Background(), remotePath, "", "abc", "")
+		t.Logf("SetFileAttributes(group=abc) result: %v", err)
 
-	// Set owner only (may fail if user doesn't exist, but covers the code path).
-	err = client.SetFileAttributes(context.Background(), remotePath, "abc", "", "")
-	// Note: Error is expected since "abc" user likely doesn't exist.
-	t.Logf("SetFileAttributes(owner=abc) result: %v", err)
+		// Set both owner and group.
+		err = client.SetFileAttributes(context.Background(), remotePath, "abc", "abc", "")
+		t.Logf("SetFileAttributes(owner=abc, group=abc) result: %v", err)
 
-	// Set group only.
-	err = client.SetFileAttributes(context.Background(), remotePath, "", "abc", "")
-	t.Logf("SetFileAttributes(group=abc) result: %v", err)
-
-	// Set both owner and group.
-	err = client.SetFileAttributes(context.Background(), remotePath, "abc", "abc", "")
-	t.Logf("SetFileAttributes(owner=abc, group=abc) result: %v", err)
-
-	// Set mode and ownership together.
-	err = client.SetFileAttributes(context.Background(), remotePath, "abc", "abc", "0644")
-	t.Logf("SetFileAttributes(all) result: %v", err)
+		// Set mode and ownership together.
+		err = client.SetFileAttributes(context.Background(), remotePath, "abc", "abc", "0644")
+		t.Logf("SetFileAttributes(all) result: %v", err)
+	})
 }
 
 func TestIntegration_NewSyncer_Error(t *testing.T) {
