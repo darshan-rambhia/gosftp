@@ -16,7 +16,6 @@ import (
 	"time"
 
 	"golang.org/x/crypto/ssh"
-	gossh "golang.org/x/crypto/ssh"
 )
 
 // generateTestKey creates a temporary RSA private key for testing.
@@ -1407,7 +1406,6 @@ func TestClient_SetFileAttributes_EmptyMode(t *testing.T) {
 }
 
 // Tests for UploadFile using MockSFTPClient.
-
 func TestClient_UploadFile_WithMockSFTP(t *testing.T) {
 	mockSFTP := NewMockSFTPClient()
 	client := NewClientWithSFTP(mockSFTP, nil)
@@ -1523,8 +1521,6 @@ func TestClient_Close_SFTPError(t *testing.T) {
 	_ = client.Close()
 	// Just verifying it doesn't panic.
 }
-
-// Security-related tests
 
 // TestSetFileAttributes_OwnerValidation tests that invalid owner names are rejected.
 func TestSetFileAttributes_OwnerValidation(t *testing.T) {
@@ -1707,13 +1703,13 @@ func TestBuildHostKeyCallback(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		sshPubKey, err := gossh.NewPublicKey(&key.PublicKey)
+		sshPubKey, err := ssh.NewPublicKey(&key.PublicKey)
 		if err != nil {
 			t.Fatal(err)
 		}
 
 		// Format as known_hosts entry.
-		validEntry := fmt.Sprintf("example.com %s", string(gossh.MarshalAuthorizedKey(sshPubKey)))
+		validEntry := fmt.Sprintf("example.com %s", string(ssh.MarshalAuthorizedKey(sshPubKey)))
 		if err := os.WriteFile(knownHostsFile, []byte(validEntry), 0600); err != nil {
 			t.Fatal(err)
 		}
@@ -1731,18 +1727,19 @@ func TestBuildHostKeyCallback(t *testing.T) {
 	})
 
 	t.Run("empty_config_returns_callback", func(t *testing.T) {
-		// When no known_hosts is configured, should return a callback
-		// (either from default known_hosts or fallback permissive mode).
+		// When no known_hosts is configured and InsecureIgnoreHostKey is false,
+		// should either return a callback from default ~/.ssh/known_hosts (if it exists)
+		// or return an error (fail-closed security).
 		config := Config{
 			InsecureIgnoreHostKey: false,
 			KnownHostsFile:        "",
 		}
 		callback, err := buildHostKeyCallback(config)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if callback == nil {
-			t.Error("expected non-nil callback")
+		// Accept either outcome:
+		// 1. Success if ~/.ssh/known_hosts exists (common on developer machines)
+		// 2. Error if ~/.ssh/known_hosts doesn't exist (fail-closed security, common in CI)
+		if err == nil && callback == nil {
+			t.Error("expected either a valid callback or an error")
 		}
 	})
 
@@ -1758,8 +1755,7 @@ func TestBuildHostKeyCallback(t *testing.T) {
 	})
 }
 
-// Tests for context cancellation
-
+// Tests for context cancellation.
 func TestClient_UploadFile_ContextCancelled(t *testing.T) {
 	mockSFTP := NewMockSFTPClient()
 	client := NewClientWithSFTP(mockSFTP, nil)
@@ -1826,8 +1822,7 @@ func TestBuildCertificateAuth_WithCertPath(t *testing.T) {
 	}
 }
 
-// Test buildAuthMethods with empty auth method (default to private key)
-
+// Test buildAuthMethods with empty auth method (default to private key).
 func TestBuildAuthMethods_EmptyAuthMethod(t *testing.T) {
 	keyContent, _ := generateTestKey(t)
 
@@ -1863,8 +1858,7 @@ func TestClient_UploadFile_RelativePath(t *testing.T) {
 	}
 }
 
-// Test UploadFile with . directory
-
+// Test UploadFile with . directory.
 func TestClient_UploadFile_CurrentDir(t *testing.T) {
 	mockSFTP := NewMockSFTPClient()
 	client := NewClientWithSFTP(mockSFTP, nil)
@@ -2269,7 +2263,7 @@ func TestClient_SetFileAttributes_Mode_Variants(t *testing.T) {
 	}
 }
 
-// TestClient_UploadFile_Variants tests various upload scenarios
+// TestClient_UploadFile_Variants tests various upload scenarios.
 func TestClient_UploadFile_Variants(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -2412,7 +2406,7 @@ func TestClient_UploadFile_Variants(t *testing.T) {
 	}
 }
 
-// TestClient_ReadFileContent_Variants tests reading files with different sizes and scenarios
+// TestClient_ReadFileContent_Variants tests reading files with different sizes and scenarios.
 func TestClient_ReadFileContent_Variants(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -2582,7 +2576,7 @@ func TestClient_ReadFileContent_Variants(t *testing.T) {
 	}
 }
 
-// TestClient_DeleteFile_Variants tests delete with various scenarios
+// TestClient_DeleteFile_Variants tests delete with various scenarios.
 func TestClient_DeleteFile_Variants(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -2657,15 +2651,15 @@ func TestClient_DeleteFile_Variants(t *testing.T) {
 	}
 }
 
-// TestClient_FileExists_Variants tests file existence check with different states
+// TestClient_FileExists_Variants tests file existence check with different states.
 func TestClient_FileExists_Variants(t *testing.T) {
 	tests := []struct {
-		name           string
-		setupMock      func() *MockSFTPClient
-		remotePath     string
-		expectExists   bool
-		expectError    bool
-		errorSubstr    string
+		name         string
+		setupMock    func() *MockSFTPClient
+		remotePath   string
+		expectExists bool
+		expectError  bool
+		errorSubstr  string
 	}{
 		{
 			name: "file exists",
@@ -2736,7 +2730,7 @@ func TestClient_FileExists_Variants(t *testing.T) {
 	}
 }
 
-// TestClient_Close_Variants tests client close with different client states
+// TestClient_Close_Variants tests client close with different client states.
 func TestClient_Close_Variants(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -2799,7 +2793,7 @@ func TestClient_Close_Variants(t *testing.T) {
 	}
 }
 
-// TestClient_GetFileInfo_Variants tests GetFileInfo with various scenarios
+// TestClient_GetFileInfo_Variants tests GetFileInfo with various scenarios.
 func TestClient_GetFileInfo_Variants(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -2895,12 +2889,12 @@ func TestClient_GetFileInfo_Variants(t *testing.T) {
 	}
 }
 
-// TestSFTPClientWrapper_Methods tests the wrapper methods
+// TestSFTPClientWrapper_Methods tests the wrapper methods.
 func TestSFTPClientWrapper_Methods(t *testing.T) {
 	mockSFTP := NewMockSFTPClient()
 	mockSFTP.SetFile("/test.txt", []byte("content"), 0644)
 
-	wrapper := &SFTPClientWrapper{client: nil} // We'll test with mock behavior
+	wrapper := &SFTPClientWrapper{} // We'll test with mock behavior
 
 	// Test that wrapper implements SFTPClientInterface
 	var _ SFTPClientInterface = wrapper
@@ -2911,7 +2905,7 @@ func TestSFTPClientWrapper_Methods(t *testing.T) {
 	})
 }
 
-// TestClient_SetFileAttributes_ContextCancellation tests context cancellation in SetFileAttributes
+// TestClient_SetFileAttributes_ContextCancellation tests context cancellation in SetFileAttributes.
 func TestClient_SetFileAttributes_ContextCancellation(t *testing.T) {
 	mockSFTP := NewMockSFTPClient()
 	mockSFTP.SetFile("/test.txt", []byte("content"), 0644)
@@ -2929,7 +2923,7 @@ func TestClient_SetFileAttributes_ContextCancellation(t *testing.T) {
 	}
 }
 
-// TestClient_DeleteFile_ContextCancellation tests context cancellation in DeleteFile
+// TestClient_DeleteFile_ContextCancellation tests context cancellation in DeleteFile.
 func TestClient_DeleteFile_ContextCancellation(t *testing.T) {
 	mockSFTP := NewMockSFTPClient()
 	mockSFTP.SetFile("/test.txt", []byte("content"), 0644)
@@ -2944,7 +2938,7 @@ func TestClient_DeleteFile_ContextCancellation(t *testing.T) {
 	}
 }
 
-// TestClient_FileExists_ContextCancellation tests context cancellation in FileExists
+// TestClient_FileExists_ContextCancellation tests context cancellation in FileExists.
 func TestClient_FileExists_ContextCancellation(t *testing.T) {
 	mockSFTP := NewMockSFTPClient()
 	mockSFTP.SetFile("/test.txt", []byte("content"), 0644)
@@ -2959,7 +2953,7 @@ func TestClient_FileExists_ContextCancellation(t *testing.T) {
 	}
 }
 
-// TestClient_GetFileInfo_ContextCancellation tests context cancellation in GetFileInfo
+// TestClient_GetFileInfo_ContextCancellation tests context cancellation in GetFileInfo.
 func TestClient_GetFileInfo_ContextCancellation(t *testing.T) {
 	mockSFTP := NewMockSFTPClient()
 	mockSFTP.SetFile("/test.txt", []byte("content"), 0644)
@@ -2974,7 +2968,7 @@ func TestClient_GetFileInfo_ContextCancellation(t *testing.T) {
 	}
 }
 
-// TestClient_ReadFileContent_ContextCancellation tests context cancellation in ReadFileContent
+// TestClient_ReadFileContent_ContextCancellation tests context cancellation in ReadFileContent.
 func TestClient_ReadFileContent_ContextCancellation(t *testing.T) {
 	mockSFTP := NewMockSFTPClient()
 	content := make([]byte, 1024*1024) // 1MB to ensure cancellation can occur
@@ -2990,9 +2984,9 @@ func TestClient_ReadFileContent_ContextCancellation(t *testing.T) {
 	}
 }
 
-// TestBuildCertificateAuth_ValidCertificate tests building certificate auth with a valid cert
+// TestBuildCertificateAuth_ValidCertificate tests building certificate auth with a valid cert.
 func TestBuildCertificateAuth_ValidCertificate(t *testing.T) {
-	// Generate a test key - we'll use the same key for both private key and certificate
+	// Generate a test key - we'll use the same key for both private key and certificate.
 	testKey, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		t.Fatal(err)
@@ -3375,10 +3369,10 @@ func TestClient_GetFileHash_Errors(t *testing.T) {
 // TestBuildHostKeyCallback_AllBranches tests all code paths in buildHostKeyCallback.
 func TestBuildHostKeyCallback_AllBranches(t *testing.T) {
 	tests := []struct {
-		name            string
-		config          Config
-		expectError     bool
-		expectErrorMsg  string
+		name           string
+		config         Config
+		expectError    bool
+		expectErrorMsg string
 	}{
 		{
 			name: "insecure ignore host key",
@@ -3468,22 +3462,22 @@ func TestSetFileAttributes_AdditionalEdgeCases(t *testing.T) {
 		errorSubstr string
 	}{
 		{
-			name:        "set mode only",
-			remotePath:  "/tmp/file.txt",
-			owner:       "",
-			group:       "",
-			mode:        "0755",
+			name:       "set mode only",
+			remotePath: "/tmp/file.txt",
+			owner:      "",
+			group:      "",
+			mode:       "0755",
 			mockSetup: func(m *MockSFTPClient) {
 				m.SetFile("/tmp/file.txt", []byte("content"), 0644)
 			},
 			expectError: false,
 		},
 		{
-			name:        "chmod error",
-			remotePath:  "/tmp/file.txt",
-			owner:       "",
-			group:       "",
-			mode:        "0755",
+			name:       "chmod error",
+			remotePath: "/tmp/file.txt",
+			owner:      "",
+			group:      "",
+			mode:       "0755",
 			mockSetup: func(m *MockSFTPClient) {
 				m.SetFile("/tmp/file.txt", []byte("content"), 0644)
 				m.SetError("Chmod", errors.New("chmod failed"))
@@ -3492,11 +3486,11 @@ func TestSetFileAttributes_AdditionalEdgeCases(t *testing.T) {
 			errorSubstr: "chmod failed",
 		},
 		{
-			name:        "empty strings for owner and group",
-			remotePath:  "/tmp/file.txt",
-			owner:       "",
-			group:       "",
-			mode:        "",
+			name:       "empty strings for owner and group",
+			remotePath: "/tmp/file.txt",
+			owner:      "",
+			group:      "",
+			mode:       "",
 			mockSetup: func(m *MockSFTPClient) {
 				m.SetFile("/tmp/file.txt", []byte("content"), 0644)
 			},
@@ -3657,16 +3651,16 @@ func TestDeleteFile_Variants(t *testing.T) {
 // TestFileExists_Variants tests FileExists with different file states.
 func TestFileExists_Variants(t *testing.T) {
 	tests := []struct {
-		name        string
-		remotePath  string
-		mockSetup   func(*MockSFTPClient)
+		name         string
+		remotePath   string
+		mockSetup    func(*MockSFTPClient)
 		expectExists bool
-		expectError bool
-		errorSubstr string
+		expectError  bool
+		errorSubstr  string
 	}{
 		{
-			name:        "file exists",
-			remotePath:  "/tmp/exists.txt",
+			name:       "file exists",
+			remotePath: "/tmp/exists.txt",
 			mockSetup: func(m *MockSFTPClient) {
 				m.SetFile("/tmp/exists.txt", []byte("content"), 0644)
 			},
@@ -3674,8 +3668,8 @@ func TestFileExists_Variants(t *testing.T) {
 			expectError:  false,
 		},
 		{
-			name:        "file does not exist",
-			remotePath:  "/tmp/notfound.txt",
+			name:       "file does not exist",
+			remotePath: "/tmp/notfound.txt",
 			mockSetup: func(m *MockSFTPClient) {
 				// No files set up
 			},
@@ -3683,8 +3677,8 @@ func TestFileExists_Variants(t *testing.T) {
 			expectError:  false,
 		},
 		{
-			name:        "stat error",
-			remotePath:  "/tmp/error.txt",
+			name:       "stat error",
+			remotePath: "/tmp/error.txt",
 			mockSetup: func(m *MockSFTPClient) {
 				m.SetFile("/tmp/error.txt", []byte("content"), 0644)
 				m.SetError("Stat", errors.New("stat failed"))

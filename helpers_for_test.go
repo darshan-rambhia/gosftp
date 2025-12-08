@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	gossh "golang.org/x/crypto/ssh"
+	"golang.org/x/crypto/ssh"
 )
 
 // generateTestRSAKey creates a test RSA private key and returns both PEM-encoded
@@ -53,12 +53,12 @@ func generateTestPublicKey(t *testing.T, privateKeyPEM string) string {
 		t.Fatalf("failed to parse private key: %v", err)
 	}
 
-	publicKey, err := gossh.NewPublicKey(&privateKey.PublicKey)
+	publicKey, err := ssh.NewPublicKey(&privateKey.PublicKey)
 	if err != nil {
 		t.Fatalf("failed to create SSH public key: %v", err)
 	}
 
-	return string(gossh.MarshalAuthorizedKey(publicKey))
+	return string(ssh.MarshalAuthorizedKey(publicKey))
 }
 
 // createTempFile creates a temporary file with the given content.

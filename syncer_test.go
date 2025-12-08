@@ -1213,7 +1213,7 @@ func TestSyncFile_ErrorScenarios(t *testing.T) {
 	}
 }
 
-// TestHashFile_Variants tests HashFile with edge cases
+// TestHashFile_Variants tests HashFile with edge cases.
 func TestHashFile_Variants(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -1337,7 +1337,7 @@ func TestHashFile_Variants(t *testing.T) {
 	}
 }
 
-// TestShouldExclude_Coverage adds remaining pattern matching scenarios
+// TestShouldExclude_Coverage adds remaining pattern matching scenarios.
 func TestShouldExclude_Coverage(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -1417,7 +1417,7 @@ func TestShouldExclude_Coverage(t *testing.T) {
 	}
 }
 
-// TestSyncFile_ContextCancelled tests file sync with cancelled context
+// TestSyncFile_ContextCancelled tests file sync with cancelled context.
 func TestSyncFile_ContextCancelled(t *testing.T) {
 	tmpDir := t.TempDir()
 	localFile := filepath.Join(tmpDir, "test.txt")
@@ -1435,7 +1435,7 @@ func TestSyncFile_ContextCancelled(t *testing.T) {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	cancel() // Cancel immediately
+	cancel() // Cancel immediately.
 
 	result, err := syncer.SyncFile(ctx, localFile, "/remote/test.txt", nil)
 	if err == nil {
@@ -1446,16 +1446,16 @@ func TestSyncFile_ContextCancelled(t *testing.T) {
 	}
 }
 
-// TestClient_GetFileHash_ContextCancelled tests hash getting with cancelled context
+// TestClient_GetFileHash_ContextCancelled tests hash getting with cancelled context.
 func TestClient_GetFileHash_ContextCancelled(t *testing.T) {
 	mockSFTP := NewMockSFTPClient()
-	// Create a large file to ensure context cancellation can occur
-	content := make([]byte, 1024*1024) // 1MB
+	// Create a large file to ensure context cancellation can occur.
+	content := make([]byte, 1024*1024) // 1MB.
 	mockSFTP.SetFile("/large.bin", content, 0644)
 	client := NewClientWithSFTP(mockSFTP, nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
-	cancel() // Cancel immediately
+	cancel() // Cancel immediately.
 
 	_, err := client.GetFileHash(ctx, "/large.bin")
 	if err == nil {
@@ -1466,13 +1466,13 @@ func TestClient_GetFileHash_ContextCancelled(t *testing.T) {
 	}
 }
 
-// TestSyncDirectory_ContextCancelled_Variants adds more context cancellation scenarios
+// TestSyncDirectory_ContextCancelled_Variants adds more context cancellation scenarios.
 func TestSyncDirectory_ContextCancelled_Variants(t *testing.T) {
 	tests := []struct {
-		name          string
-		setupFiles    func(tmpDir string) error
-		cancelTiming  string // "immediate", "after_scan"
-		expectErrors  bool
+		name         string
+		setupFiles   func(tmpDir string) error
+		cancelTiming string // "immediate", "after_scan"
+		expectErrors bool
 	}{
 		{
 			name: "immediate cancellation",
@@ -1532,7 +1532,7 @@ func TestSyncDirectory_ContextCancelled_Variants(t *testing.T) {
 	}
 }
 
-// TestScanDirectory_EdgeCases tests additional edge cases for directory scanning
+// TestScanDirectory_EdgeCases tests additional edge cases for directory scanning.
 func TestScanDirectory_EdgeCases(t *testing.T) {
 	tests := []struct {
 		name          string
