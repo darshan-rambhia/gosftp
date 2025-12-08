@@ -2,6 +2,11 @@
 
 A Go library for synchronizing files over SSH/SFTP with connection pooling, retry logic, and bastion host support.
 
+[![CI](https://github.com/darshan-rambhia/gosftp/actions/workflows/ci.yml/badge.svg)](https://github.com/darshan-rambhia/gosftp/actions/workflows/ci.yml)
+[![Go Version](https://img.shields.io/badge/go-1.24-00ADD8?logo=go)](https://go.dev/)
+[![codecov](https://codecov.io/gh/darshan-rambhia/gosftp/graph/badge.svg)](https://codecov.io/gh/darshan-rambhia/gosftp)
+[![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+
 ## Features
 
 - SSH client with SFTP support for file operations
