@@ -1,0 +1,18 @@
+version: "2"
+
+run:
+  timeout: 5m
+  tests: true
+
+linters:
+  default: standard
+  disable:
+    - errcheck  # Too many false positives for defer Close() patterns
+  enable:
+    - misspell
+    - unconvert
+    - prealloc
+
+settings:
+  misspell:
+    locale: US
