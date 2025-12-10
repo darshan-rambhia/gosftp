@@ -35,6 +35,25 @@ const (
 	AuthMethodCertificate AuthMethod = "certificate"
 )
 
+// StrictHostKeyChecking controls SSH host key verification behavior.
+// This mirrors OpenSSH's StrictHostKeyChecking option.
+type StrictHostKeyChecking string
+
+const (
+	// StrictHostKeyCheckingYes requires the host key to be in known_hosts.
+	// Unknown hosts are rejected. This is the default behavior.
+	StrictHostKeyCheckingYes StrictHostKeyChecking = "yes"
+
+	// StrictHostKeyCheckingNo disables host key verification entirely.
+	// WARNING: This is insecure and vulnerable to MITM attacks.
+	StrictHostKeyCheckingNo StrictHostKeyChecking = "no"
+
+	// StrictHostKeyCheckingAcceptNew accepts and saves keys for new hosts,
+	// but rejects connections if a known host's key has changed.
+	// This is a good balance between security and convenience.
+	StrictHostKeyCheckingAcceptNew StrictHostKeyChecking = "accept-new"
+)
+
 // Config holds SSH connection configuration.
 type Config struct {
 	// Host is the target SSH server hostname or IP address.
@@ -78,7 +97,13 @@ type Config struct {
 
 	// InsecureIgnoreHostKey skips host key verification.
 	// WARNING: This is insecure and should only be used for testing.
+	// Deprecated: Use StrictHostKeyChecking = "no" instead.
 	InsecureIgnoreHostKey bool
+
+	// StrictHostKeyChecking controls host key verification behavior.
+	// Valid values: "yes" (default), "no", "accept-new".
+	// Takes precedence over InsecureIgnoreHostKey if set.
+	StrictHostKeyChecking StrictHostKeyChecking
 
 	// BastionHost is the hostname or IP of a bastion/jump host.
 	BastionHost string

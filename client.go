@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -485,42 +486,144 @@ func connectToBastion(config Config) (*ssh.Client, error) {
 }
 
 func buildHostKeyCallback(config Config) (ssh.HostKeyCallback, error) {
-	if config.InsecureIgnoreHostKey {
+	// Determine effective strict host key checking mode.
+	// StrictHostKeyChecking takes precedence over InsecureIgnoreHostKey.
+	mode := config.StrictHostKeyChecking
+	if mode == "" {
+		// Fall back to legacy InsecureIgnoreHostKey behavior.
+		if config.InsecureIgnoreHostKey {
+			mode = StrictHostKeyCheckingNo
+		} else {
+			mode = StrictHostKeyCheckingYes
+		}
+	}
+
+	// Handle "no" mode - skip all verification.
+	if mode == StrictHostKeyCheckingNo {
 		if config.Logger != nil {
 			config.Logger.Warnf("SSH host key verification disabled for %s:%d - this is insecure!", config.Host, config.Port)
 		}
 		return ssh.InsecureIgnoreHostKey(), nil
 	}
 
-	if config.KnownHostsFile != "" {
-		expandedPath := ExpandPath(config.KnownHostsFile)
-		callback, err := knownhosts.New(expandedPath)
-		if err != nil {
-			return nil, fmt.Errorf("failed to load known_hosts file %s: %w", expandedPath, err)
+	// Determine known_hosts file path.
+	knownHostsPath := config.KnownHostsFile
+	if knownHostsPath != "" {
+		knownHostsPath = ExpandPath(knownHostsPath)
+	} else {
+		homeDir, err := os.UserHomeDir()
+		if err == nil {
+			knownHostsPath = filepath.Join(homeDir, ".ssh", "known_hosts")
 		}
-		return callback, nil
 	}
 
-	homeDir, err := os.UserHomeDir()
-	if err == nil {
-		defaultKnownHosts := filepath.Join(homeDir, ".ssh", "known_hosts")
-		if _, err := os.Stat(defaultKnownHosts); err == nil {
-			callback, err := knownhosts.New(defaultKnownHosts)
+	// Handle "accept-new" mode - accept new hosts, reject changed keys.
+	if mode == StrictHostKeyCheckingAcceptNew {
+		return buildAcceptNewCallback(config, knownHostsPath)
+	}
+
+	// Handle "yes" mode (default) - strict verification.
+	if knownHostsPath == "" {
+		return nil, fmt.Errorf(
+			"no known_hosts file found for %s:%d - host key verification impossible. "+
+				"Set StrictHostKeyChecking=\"no\" to bypass (NOT RECOMMENDED) or "+
+				"StrictHostKeyChecking=\"accept-new\" to auto-add new hosts",
+			config.Host, config.Port,
+		)
+	}
+
+	if _, err := os.Stat(knownHostsPath); os.IsNotExist(err) {
+		return nil, fmt.Errorf(
+			"known_hosts file %s does not exist for %s:%d. "+
+				"Set StrictHostKeyChecking=\"accept-new\" to auto-create it",
+			knownHostsPath, config.Host, config.Port,
+		)
+	}
+
+	callback, err := knownhosts.New(knownHostsPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load known_hosts file %s: %w", knownHostsPath, err)
+	}
+	return callback, nil
+}
+
+// buildAcceptNewCallback creates a host key callback that accepts new hosts
+// and adds them to the known_hosts file, but rejects changed keys.
+func buildAcceptNewCallback(config Config, knownHostsPath string) (ssh.HostKeyCallback, error) {
+	// Ensure the .ssh directory exists.
+	if knownHostsPath != "" {
+		sshDir := filepath.Dir(knownHostsPath)
+		if err := os.MkdirAll(sshDir, 0700); err != nil {
+			return nil, fmt.Errorf("failed to create .ssh directory: %w", err)
+		}
+	}
+
+	// Try to load existing known_hosts (may not exist yet).
+	var existingCallback ssh.HostKeyCallback
+	if knownHostsPath != "" {
+		if _, err := os.Stat(knownHostsPath); err == nil {
+			cb, err := knownhosts.New(knownHostsPath)
 			if err == nil {
-				return callback, nil
-			}
-			if config.Logger != nil {
-				config.Logger.Warnf("Could not parse known_hosts file %s: %v", defaultKnownHosts, err)
+				existingCallback = cb
+			} else if config.Logger != nil {
+				config.Logger.Warnf("Could not parse known_hosts file %s: %v", knownHostsPath, err)
 			}
 		}
 	}
 
-	// Fail-closed: require explicit opt-in if no known_hosts is available
-	return nil, fmt.Errorf(
-		"no known_hosts file found for %s:%d - host key verification impossible. "+
-			"Set InsecureIgnoreHostKey=true to bypass (NOT RECOMMENDED)",
-		config.Host, config.Port,
-	)
+	return func(hostname string, remote net.Addr, key ssh.PublicKey) error {
+		// If we have an existing callback, try it first.
+		if existingCallback != nil {
+			err := existingCallback(hostname, remote, key)
+			if err == nil {
+				// Key is known and matches.
+				return nil
+			}
+
+			// Check if this is a key mismatch (security issue) vs unknown host.
+			var keyErr *knownhosts.KeyError
+			if errors.As(err, &keyErr) && len(keyErr.Want) > 0 {
+				// Key mismatch - the host is known but key changed. This is a security issue.
+				return fmt.Errorf("host key mismatch for %s: expected %s, got %s. "+
+					"This could indicate a MITM attack or the server's key was changed. "+
+					"Remove the old key from %s to accept the new key",
+					hostname,
+					keyErr.Want[0].Key.Type(),
+					key.Type(),
+					knownHostsPath,
+				)
+			}
+			// Unknown host - fall through to add it.
+		}
+
+		// Host is unknown - add it to known_hosts.
+		if knownHostsPath == "" {
+			if config.Logger != nil {
+				config.Logger.Warnf("No known_hosts file configured, accepting key for %s without saving", hostname)
+			}
+			return nil
+		}
+
+		// Format the host key line.
+		line := knownhosts.Line([]string{knownhosts.Normalize(hostname)}, key)
+
+		// Append to known_hosts file.
+		f, err := os.OpenFile(knownHostsPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
+		if err != nil {
+			return fmt.Errorf("failed to open known_hosts file for writing: %w", err)
+		}
+		defer f.Close()
+
+		if _, err := fmt.Fprintln(f, line); err != nil {
+			return fmt.Errorf("failed to write to known_hosts file: %w", err)
+		}
+
+		if config.Logger != nil {
+			config.Logger.Infof("Added host key for %s to %s", hostname, knownHostsPath)
+		}
+
+		return nil
+	}, nil
 }
 
 func buildAuthMethods(config Config) ([]ssh.AuthMethod, error) {

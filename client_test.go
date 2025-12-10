@@ -3401,7 +3401,7 @@ func TestBuildHostKeyCallback_AllBranches(t *testing.T) {
 				KnownHostsFile: "/nonexistent/path/known_hosts",
 			},
 			expectError:    true,
-			expectErrorMsg: "failed to load known_hosts file",
+			expectErrorMsg: "does not exist",
 		},
 	}
 
