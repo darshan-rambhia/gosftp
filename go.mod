@@ -1,11 +1,12 @@
 module github.com/darshan-rambhia/gosftp
 
-go 1.24.0
+go 1.25.0
 
 require (
 	github.com/pkg/sftp v1.13.10
 	github.com/testcontainers/testcontainers-go v0.40.0
-	golang.org/x/crypto v0.45.0
+	golang.org/x/crypto v0.49.0
+	golang.org/x/net v0.52.0
 )
 
 require (
@@ -60,7 +61,7 @@ require (
 	go.opentelemetry.io/otel/sdk v1.38.0 // indirect
 	go.opentelemetry.io/otel/trace v1.38.0 // indirect
 	go.opentelemetry.io/proto/otlp v1.9.0 // indirect
-	golang.org/x/sys v0.38.0 // indirect
+	golang.org/x/sys v0.42.0 // indirect
 	google.golang.org/protobuf v1.36.10 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )

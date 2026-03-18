@@ -14,9 +14,12 @@ import (
 	"strconv"
 	"strings"
 
+	"net/url"
+
 	"github.com/pkg/sftp"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/knownhosts"
+	"golang.org/x/net/proxy"
 )
 
 // ClientInterface defines the interface for SSH/SFTP operations.
@@ -136,7 +139,7 @@ func NewClient(config Config) (*Client, error) {
 
 		sshClient = ssh.NewClient(ncc, chans, reqs)
 	} else {
-		sshClient, err = ssh.Dial("tcp", targetAddr, sshConfig)
+		sshClient, err = sshDialWithProxy("tcp", targetAddr, sshConfig, config.ProxyURL)
 		if err != nil {
 			return nil, fmt.Errorf("failed to connect to %s: %w", targetAddr, err)
 		}
@@ -482,7 +485,38 @@ func connectToBastion(config Config) (*ssh.Client, error) {
 	}
 
 	bastionAddr := fmt.Sprintf("%s:%d", config.BastionHost, config.BastionPort)
-	return ssh.Dial("tcp", bastionAddr, bastionConfig)
+	return sshDialWithProxy("tcp", bastionAddr, bastionConfig, config.ProxyURL)
+}
+
+// sshDialWithProxy establishes an SSH connection, optionally routing through a SOCKS5 proxy.
+// If proxyURL is empty, dials directly. Otherwise, dials through the specified proxy.
+func sshDialWithProxy(network, addr string, config *ssh.ClientConfig, proxyURL string) (*ssh.Client, error) {
+	if proxyURL == "" {
+		return ssh.Dial(network, addr, config)
+	}
+
+	parsed, err := url.Parse(proxyURL)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse proxy URL %q: %w", proxyURL, err)
+	}
+
+	dialer, err := proxy.FromURL(parsed, proxy.Direct)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create proxy dialer from %q: %w", proxyURL, err)
+	}
+
+	conn, err := dialer.Dial(network, addr)
+	if err != nil {
+		return nil, fmt.Errorf("failed to dial %s through proxy %s: %w", addr, parsed.Host, err)
+	}
+
+	ncc, chans, reqs, err := ssh.NewClientConn(conn, addr, config)
+	if err != nil {
+		conn.Close()
+		return nil, err
+	}
+
+	return ssh.NewClient(ncc, chans, reqs), nil
 }
 
 func buildHostKeyCallback(config Config) (ssh.HostKeyCallback, error) {

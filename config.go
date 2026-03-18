@@ -129,6 +129,11 @@ type Config struct {
 	// AgentForwarding enables SSH agent forwarding.
 	AgentForwarding bool
 
+	// ProxyURL is the URL of a SOCKS5 proxy to dial through (e.g. "socks5://127.0.0.1:1080").
+	// When set, all SSH connections (direct and bastion) are established through the proxy.
+	// If empty, connections are made directly.
+	ProxyURL string
+
 	// Logger is the logger to use for debug and info messages.
 	// If not set, a no-op logger is used (all messages discarded).
 	Logger Logger
